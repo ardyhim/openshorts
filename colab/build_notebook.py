@@ -45,6 +45,8 @@ Notebook ini menjalankan **OpenShorts versi free mode** di Google Colab (disaran
 
 > **Peringatan privasi:** opsi tunnel **Cloudflared** membuat dashboard bisa diakses publik tanpa login. Gunakan **Colab proxy** (default) kalau tidak ingin orang lain membuka GPU dan hasil video Anda.
 
+> **Lisensi model:** **Wav2Lip hanya untuk riset/personal/non-komersial** (lihat README upstream). Untuk konten komersial, set `WAV2LIP_DISABLE=1` di `.env` agar pipeline memakai still image + audio, atau ganti dengan model berlisensi komersial. RealVisXL V4.0 memakai lisensi OpenRAIL++-M.
+
 > **Batas Colab gratis:** sesi bisa terputus kapan saja. Simpan hasil ke Google Drive sebelum runtime mati (ada cell backup di bagian akhir).
 """)
 

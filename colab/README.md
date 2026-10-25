@@ -133,7 +133,21 @@ OpenShorts bisa memposting ke TikTok, Instagram Reels, dan YouTube Shorts lewat 
 
 ---
 
-## 6. Struktur project setelah dijalankan
+## 6. Lisensi model (penting)
+
+| Komponen | Lisensi / catatan |
+|---|---|
+| **Wav2Lip** (repo + checkpoint) | **Hanya untuk riset, akademik, dan personal/non-komersial.** README upstream menyatakan penggunaan komersial dilarang. Untuk penggunaan komersial, set `WAV2LIP_DISABLE=1` (pipeline memakai still image + audio) atau ganti dengan model/layanan yang berlisensi komersial. |
+| **RealVisXL V4.0** (SDXL) | CreativeML **OpenRAIL++-M**. Penggunaan komersial diizinkan dengan batasan penggunaan (baca kartu model di Hugging Face). |
+| **edge-tts** | Menggunakan layanan suara Microsoft Edge, bukan API resmi. Gunakan secara wajar; jangan membuat layanan TTS publik berbasis volume besar. |
+| **faster-whisper / Whisper** | Kode MIT; bobot model mengikuti lisensi OpenAI Whisper. |
+| **OpenShorts** | MIT (lihat `LICENSE` di root repo). |
+
+> Free mode ini cocok untuk eksperimen pribadi, konten sendiri, dan riset. Kalau hasilnya dipakai untuk klien atau iklan berbayar, periksa ulang lisensi Wav2Lip dan aktifkan fallback non-Wav2Lip.
+
+---
+
+## 7. Struktur project setelah dijalankan
 
 ```
 /content/openshorts/
@@ -153,7 +167,7 @@ OpenShorts bisa memposting ke TikTok, Instagram Reels, dan YouTube Shorts lewat 
 
 ---
 
-## 7. Kalau memakai fork GitHub sendiri
+## 8. Kalau memakai fork GitHub sendiri
 
 Kalau sudah push perubahan ini ke GitHub, tidak perlu upload ZIP:
 
@@ -166,7 +180,7 @@ Repo original `ardyhim/openshorts` **belum** berisi free mode; clone dari sana a
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Masalah | Penyebab / solusi |
 |---|---|
@@ -184,7 +198,7 @@ Repo original `ardyhim/openshorts` **belum** berisi free mode; clone dari sana a
 
 ---
 
-## 9. Keamanan dan privasi
+## 10. Keamanan dan privasi
 
 - **Jangan commit `.env`.** File itu berisi API key dan hanya dibuat di runtime.
 - **Jangan bagikan URL Cloudflared.** Dashboard self-host tidak punya autentikasi.
@@ -194,7 +208,7 @@ Repo original `ardyhim/openshorts` **belum** berisi free mode; clone dari sana a
 
 ---
 
-## 10. Menjalankan tanpa Colab (ringkas)
+## 11. Menjalankan tanpa Colab (ringkas)
 
 Free mode juga bisa jalan di Linux dengan GPU/CPU:
 

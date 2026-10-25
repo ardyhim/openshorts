@@ -6663,9 +6663,11 @@ async def saasshorts_analyze(
                 try:
                     scraped = scrape_website(req.url)
                 except Exception as scrape_err:
-                    if gemini_key or not req.description:
+                    if gemini_key:
                         raise
-                    print(f"[SaaSShorts] ⚠️ Scrape failed ({scrape_err}); using the description instead.")
+                    # Free fallback: a domain/generic analysis still beats a hard
+                    # failure when the site blocks Colab's datacenter IP.
+                    print(f"[SaaSShorts] ⚠️ Scrape failed ({scrape_err}); using a generic local analysis.")
                     scraped = {}
                 if gemini_key:
                     web_research = research_saas_online(req.url, gemini_key)
