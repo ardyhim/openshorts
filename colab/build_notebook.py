@@ -195,8 +195,8 @@ def _node_major():
 
 node_ok = _node_major() >= 18 and shutil.which("npm")
 if not node_ok:
-    print("Node.js >= 18 / npm belum ada; memasang Node.js 20 dari NodeSource...")
-    run("curl -fsSL https://deb.nodesource.com/setup_20.x | bash -", shell=True, check=True)
+    print("Node.js >= 18 / npm belum ada; memasang Node.js 22 dari NodeSource...")
+    run("curl -fsSL https://deb.nodesource.com/setup_22.x | bash -", shell=True, check=True)
     run(["apt-get", "install", "-y", "-qq", "nodejs"], check=True)
     node_ok = _node_major() >= 18 and shutil.which("npm")
 if not node_ok:
@@ -995,7 +995,7 @@ md(r"""
 | Gemini `429` / `quota exceeded` | Kuota gratis habis. Tunggu beberapa menit/hari, atau ganti key. |
 | `yt-dlp` gagal download YouTube | Colab memakai IP datacenter yang sering diblokir YouTube. Download video di komputer lalu upload file ke dashboard. |
 | Dashboard 403 di Colab proxy | Buka ulang link, pastikan masih login akun Google yang sama, atau pakai Cloudflared. |
-| `npm ci` gagal | Pastikan Node.js >= 18 (`node -v`). Cell 3 akan memasang Node 20 bila perlu. |
+| `npm ci` gagal | Pastikan Node.js >= 18 (`node -v`). Cell 3 akan memasang Node 22 bila perlu. |
 | Hasil hilang setelah runtime mati | Jalankan cell 14 sebelum runtime berhenti, atau unduh video dari dashboard. |
 | Upload-Post menolak | Free tier Upload-Post dibatasi (sekitar 10 upload/bulan). Unduh video lalu upload manual. |
 

@@ -179,7 +179,7 @@ Repo original `ardyhim/openshorts` **belum** berisi free mode; clone dari sana a
 | Gemini `429` | Kuota free tier habis. Tunggu beberapa menit/hari. |
 | `yt-dlp` gagal | Upload file video langsung, bukan URL YouTube. |
 | Dashboard tidak muncul | Cek cell 12 (`server.log`), pastikan cell 10 sukses dan port 8000 hidup. |
-| `npm ci` gagal | Pastikan Node.js >= 18. Cell 3 memasang Node 20 bila perlu. |
+| `npm ci` gagal | Pastikan Node.js >= 18. Cell 3 memasang Node 22 bila perlu. |
 | Hasil hilang | Jalankan cell 14 (backup ke Drive) sebelum runtime berhenti. |
 
 ---
