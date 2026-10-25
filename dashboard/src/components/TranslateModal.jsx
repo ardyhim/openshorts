@@ -130,7 +130,7 @@ export default function TranslateModal({ isOpen, onClose, onTranslate, isProcess
             {/* Info */}
             <p className="text-xs text-muted leading-relaxed mb-2">
                 {freeMode
-                    ? 'The speech is transcribed locally, translated for free, then re-voiced with an edge-tts neural voice and mixed back over the original music. No API key or payment is used.'
+                    ? 'The speech is transcribed locally, translated for free, then re-voiced with an edge-tts neural voice. The original voice track is replaced; no API key or payment is used.'
                     : "The audio will be dubbed with AI-generated voice in the selected language, matching the original speaker's characteristics."}
             </p>
 

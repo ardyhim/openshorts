@@ -770,10 +770,16 @@ def _patch_wav2lip(repo: str, log=print) -> None:
          "torch.load(path_to_detector, map_location='cpu', weights_only=False)"),
     ])
 
-    # numpy >= 1.24 removed the np.float alias; a few old utility files use it.
+    # numpy >= 1.24 removed the np.float / np.int aliases; a few old utility
+    # files use them. The closing parenthesis keeps np.float32 etc. untouched.
     for rel in ("face_detection/detection/sfd/bbox.py",
-                "face_detection/detection/sfd/detect.py"):
-        _patch_file(os.path.join(repo, rel), [("np.float)", "float)")])
+                "face_detection/detection/sfd/detect.py",
+                "face_detection/utils.py"):
+        _patch_file(os.path.join(repo, rel), [
+            ("np.float)", "float)"),
+            ("np.int)", "int)"),
+            ("np.bool)", "bool)"),
+        ])
 
 
 def ensure_wav2lip(install: bool = True, log=print) -> bool:
