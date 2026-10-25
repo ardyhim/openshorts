@@ -70,7 +70,7 @@ function DragDropZone({ label, accept, onFile, file, onClear, icon }) {
   );
 }
 
-export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId, managed = false, onCreateClips = null, freeMode = false, serverGemini = false }) {
+export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId, managed = false, serverUploadPost = false, onCreateClips = null, freeMode = false, serverGemini = false }) {
   // Managed (hosted plan): Gemini runs server-side via the bearer token, no BYOK key.
   // Only send X-Gemini-Key for self-host BYOK. apiFetch attaches the bearer token.
   // Free mode: local frame-composed thumbnails + heuristic titles/description.
@@ -378,7 +378,8 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
 
   // --- Publish to YouTube ---
   const handlePublish = async () => {
-    if (!managed && (!uploadPostKey || !uploadUserId)) return alert('Please configure your Upload-Post API key and user in Settings first.');
+    if (!managed && !uploadPostKey && !serverUploadPost) return alert('Please configure your Upload-Post API key and user in Settings first.');
+    if (!managed && !uploadUserId) return alert('Please select a connected Upload-Post profile in Settings first.');
     const finalTitle = selectedTitle || manualTitle;
     if (!finalTitle) return alert('No title selected.');
     if (!selectedThumbnail) return alert('Please select a thumbnail first.');
@@ -392,7 +393,8 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
       formData.append('title', finalTitle);
       formData.append('description', description);
       formData.append('thumbnail_url', selectedThumbnail);
-      formData.append('api_key', uploadPostKey);
+      // Only send a BYOK key; the backend falls back to UPLOAD_POST_API_KEY.
+      if (uploadPostKey) formData.append('api_key', uploadPostKey);
       formData.append('user_id', uploadUserId);
 
       // Submit the publish job — returns immediately with a publish_id
@@ -1149,7 +1151,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               </div>
 
               {/* Publish Button */}
-              {(!managed && (!uploadPostKey || !uploadUserId)) ? (
+              {(!managed && (!uploadPostKey && !serverUploadPost)) ? (
                 <div className="glass-panel p-6 space-y-3">
                   <div className="flex items-center gap-2 text-warn">
                     <AlertCircle size={16} />

@@ -73,7 +73,7 @@ function detectTimezone() {
     }
 }
 
-export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploadPostKey, uploadUserId, isManaged }) {
+export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploadPostKey, uploadUserId, isManaged, serverUploadPost = false }) {
     const [time, setTime] = useState('12:00');
     const [timezone, setTimezone] = useState(detectTimezone);
     const [platforms, setPlatforms] = useState({
@@ -112,8 +112,9 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
 
     const selectedPlatforms = Object.keys(platforms).filter(k => platforms[k]);
 
-    // Managed (cloud plan/trial) users post with the server-side key — no BYOK needed
-    const canPost = isManaged || (uploadPostKey && uploadUserId);
+    // Managed (cloud plan/trial) users and self-hosted Colab servers with
+    // UPLOAD_POST_API_KEY set post with the server-side key — no BYOK needed.
+    const canPost = isManaged || ((!!uploadPostKey || serverUploadPost) && !!uploadUserId);
 
     const handleScheduleAll = async () => {
         if (!canPost) return;
@@ -136,7 +137,6 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
             const payload = {
                 job_id: jobId,
                 clip_index: index,
-                api_key: uploadPostKey,
                 user_id: uploadUserId,
                 platforms: selectedPlatforms,
                 title: clip.video_title_for_youtube_short || 'Viral Short',
@@ -144,6 +144,9 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
                 scheduled_date: scheduledDate,
                 timezone
             };
+            // Omit api_key when the server already has one; an empty string
+            // would override the backend's env fallback.
+            if (uploadPostKey) payload.api_key = uploadPostKey;
 
             try {
                 const res = await apiFetch('/api/social/post', {
@@ -227,7 +230,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
             {!canPost && (
                 <div className="mb-4 p-3 bg-warn/10 text-warn text-xs rounded-input flex items-start gap-2">
                     <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                    <div>Set your Upload-Post API key in Settings first.</div>
+                    <div>{serverUploadPost && !uploadUserId ? 'Select an Upload-Post profile in Settings first.' : 'Set your Upload-Post API key in Settings first.'}</div>
                 </div>
             )}
 

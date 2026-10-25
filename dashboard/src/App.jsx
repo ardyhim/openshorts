@@ -269,7 +269,7 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, freeMode, serverGemini } = useAuth();
+  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, freeMode, serverGemini, serverUploadPost } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   // Free plan: "want the watermark off?" once per job, when the clips land.
@@ -754,11 +754,11 @@ function App() {
   }, [falKey]);
 
   useEffect(() => {
-    if ((uploadPostKey || isManaged) && userProfiles.length === 0) {
+    if ((uploadPostKey || isManaged || serverUploadPost) && userProfiles.length === 0) {
       fetchUserProfiles({ silent: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uploadPostKey, isManaged]);
+  }, [uploadPostKey, isManaged, serverUploadPost]);
 
   // For managed users, fetch the durable R2 URLs of the current job's clips. The
   // preview player prefers them (free egress, edge-served, and not competing with
@@ -849,7 +849,7 @@ function App() {
   // silent: background auto-fetch — never alert(), just log. Managed users need
   // no local key (the server resolves its own); BYOK sends the header.
   const fetchUserProfiles = async ({ silent = false } = {}) => {
-    if (!uploadPostKey && !isManaged) return;
+    if (!uploadPostKey && !isManaged && !serverUploadPost) return;
     try {
       const res = await apiFetch('/api/social/user', {
         headers: uploadPostKey ? { 'X-Upload-Post-Key': uploadPostKey } : {}
@@ -858,8 +858,10 @@ function App() {
       const data = await res.json();
       if (data.profiles && data.profiles.length > 0) {
         setUserProfiles(data.profiles);
-        // Auto select first if none selected
-        if (!uploadUserId) {
+        // Auto-select the first profile when none is chosen, and recover when
+        // the stored username belongs to an old account/key (common on Colab
+        // where localStorage survives a restart).
+        if (!uploadUserId || !data.profiles.some((p) => p.username === uploadUserId)) {
           setUploadUserId(data.profiles[0].username);
         }
       } else if (!silent) {
@@ -879,7 +881,8 @@ function App() {
   // has template fallbacks for analysis, so no key is required at all; a Gemini
   // key (browser or server) only improves titles/scripts.
   const geminiOk = !!apiKey || !!localLlm || !!freeMode || !!serverGemini;
-  const keysMissing = !billingEnabled && !freeMode && (!geminiOk || !uploadPostKey);
+  const uploadKeyOk = isManaged || !!uploadPostKey || serverUploadPost;
+  const keysMissing = !billingEnabled && !freeMode && (!geminiOk || !uploadKeyOk);
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: Clip Generator tutorial (AuthContext set os_show_clip_tutorial
@@ -1516,7 +1519,7 @@ function App() {
               >
                 <AlertTriangle size={12} />
                 <span className="hidden md:inline">
-                  {!geminiOk && !uploadPostKey
+                  {!geminiOk && !uploadKeyOk
                     ? 'Gemini & Upload-Post keys missing'
                     : !geminiOk
                       ? 'Gemini API Key Missing'
@@ -1536,7 +1539,7 @@ function App() {
               <div className="min-w-0">
                 <span className="font-medium text-ink">Required API keys missing.</span>{' '}
                 <span className="text-muted">
-                  {!geminiOk && !uploadPostKey
+                  {!geminiOk && !uploadKeyOk
                     ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
                     : !geminiOk
                       ? 'Set your Gemini API key to use OpenShorts.'
@@ -1662,7 +1665,7 @@ function App() {
                     <li className="flex items-start gap-2"><Check size={13} className="text-ok shrink-0 mt-0.5" /> YouTube Studio, AI Shorts and dubbing work without keys.</li>
                     <li className="flex items-start gap-2"><AlertTriangle size={13} className="text-warn shrink-0 mt-0.5" /> Clip Generator needs a free Gemini key (or a local LLM via LLM_BASE_URL) to pick viral moments.</li>
                     <li className="flex items-start gap-2"><Check size={13} className="text-ok shrink-0 mt-0.5" /> Video dubbing uses free translation + edge-tts.</li>
-                    <li className="flex items-start gap-2"><AlertTriangle size={13} className="text-warn shrink-0 mt-0.5" /> Publishing still needs an Upload-Post key (free tier, no card) — or just download the video.</li>
+                    <li className="flex items-start gap-2">{serverUploadPost ? <Check size={13} className="text-ok shrink-0 mt-0.5" /> : <AlertTriangle size={13} className="text-warn shrink-0 mt-0.5" />} {serverUploadPost ? 'Publishing is configured on this server via UPLOAD_POST_API_KEY — pick a connected profile in Social Integration.' : 'Publishing still needs an Upload-Post key (free tier, no card) — or just download the video.'}</li>
                     <li className="flex items-start gap-2"><AlertTriangle size={13} className="text-warn shrink-0 mt-0.5" /> First AI Shorts run downloads the SDXL + Wav2Lip models, so it is slow.</li>
                   </ul>
                 </div>
@@ -1677,48 +1680,88 @@ function App() {
                     </div>
                     <h2 className="text-base font-medium text-ink lowercase">Social Integration</h2>
                   </div>
-                  <span className={freeMode ? 'badge-ok' : 'badge-warn'}>{freeMode ? 'Optional' : 'Required'}</span>
+                  <span className={serverUploadPost ? 'badge-ok' : (freeMode ? 'badge-ok' : 'badge-warn')}>
+                    {serverUploadPost ? 'Configured on server' : (freeMode ? 'Optional' : 'Required')}
+                  </span>
                 </div>
                 <p className="text-xs text-muted mb-6 leading-relaxed">
-                  {freeMode
-                    ? 'Optional: connect Upload-Post to publish directly to TikTok, Instagram Reels and YouTube Shorts. Without it you can still download every clip. Includes a free tier (no credit card required).'
-                    : <>Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts via <strong>Upload-Post</strong>. Includes a <strong>free tier</strong> (no credit card required).</>}
+                  {serverUploadPost
+                    ? 'The Colab server provides the Upload-Post key (UPLOAD_POST_API_KEY). Pick the connected profile to publish as, or leave it on the first profile.'
+                    : freeMode
+                      ? 'Optional: connect Upload-Post to publish directly to TikTok, Instagram Reels and YouTube Shorts. Without it you can still download every clip. Includes a free tier (no credit card required).'
+                      : <>Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts via <strong>Upload-Post</strong>. Includes a <strong>free tier</strong> (no credit card required).</>}
                 </p>
                 <div className="space-y-4">
-                  <label className="block text-sm text-muted">Upload-Post API Key</label>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      type="password"
-                      value={uploadPostKey}
-                      onChange={(e) => setUploadPostKey(e.target.value)}
-                      className="input-field"
-                      placeholder="ey..."
-                    />
-                    <button onClick={fetchUserProfiles} className="btn-quiet py-2 px-4 text-sm">
-                      Connect
-                    </button>
-                  </div>
-                  <div className="text-xs text-muted leading-relaxed">
-                    Connect your Upload-Post account to enable one-click publishing.
-                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
-                        <span className="text-ink2 font-medium">1. Login</span>
-                        <span className="text-xs text-muted">Register account</span>
-                      </a>
-                      <a href="https://app.upload-post.com/manage-users" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
-                        <span className="text-ink2 font-medium">2. Profiles</span>
-                        <span className="text-xs text-muted">Create & Connect</span>
-                      </a>
-                      <a href="https://app.upload-post.com/api-keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
-                        <span className="text-ink2 font-medium">3. API Key</span>
-                        <span className="text-xs text-muted">Generate key</span>
-                      </a>
-                    </div>
-                    <br />
-                    <span className="text-muted">
-                      Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
-                    </span>
-                  </div>
+                  {serverUploadPost ? (
+                    <>
+                      <div className="flex items-center gap-2 rounded-input border border-rule px-3 py-2.5">
+                        <Check size={14} className="text-ok shrink-0" />
+                        <div className="text-xs min-w-0">
+                          <div className="text-ink font-medium">Upload-Post API key configured on server</div>
+                          <div className="text-muted">Set by the environment variable UPLOAD_POST_API_KEY. No key is stored in this browser.</div>
+                        </div>
+                      </div>
+                      <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                        <label className="text-sm text-muted shrink-0">Publish as</label>
+                        <select
+                          value={uploadUserId}
+                          onChange={(e) => setUploadUserId(e.target.value)}
+                          className="input-field"
+                          disabled={userProfiles.length === 0}
+                        >
+                          {userProfiles.length === 0 && <option value="">No profiles loaded yet</option>}
+                          {userProfiles.map((p) => (
+                            <option key={p.username} value={p.username}>{p.username}</option>
+                          ))}
+                        </select>
+                        <button onClick={() => fetchUserProfiles()} className="btn-quiet py-2 px-4 text-sm">
+                          Refresh Profiles
+                        </button>
+                      </div>
+                      <p className="text-xs text-muted leading-relaxed">
+                        Profiles are created and connected on{' '}
+                        <a href="https://app.upload-post.com/manage-users" target="_blank" rel="noopener noreferrer" className="text-brass underline">app.upload-post.com</a>.
+                        Refreshing the page reloads this list automatically.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <label className="block text-sm text-muted">Upload-Post API Key</label>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <input
+                          type="password"
+                          value={uploadPostKey}
+                          onChange={(e) => setUploadPostKey(e.target.value)}
+                          className="input-field"
+                          placeholder="ey..."
+                        />
+                        <button onClick={fetchUserProfiles} className="btn-quiet py-2 px-4 text-sm">
+                          Connect
+                        </button>
+                      </div>
+                      <div className="text-xs text-muted leading-relaxed">
+                        Connect your Upload-Post account to enable one-click publishing.
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <a href="https://app.upload-post.com/login" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
+                            <span className="text-ink2 font-medium">1. Login</span>
+                            <span className="text-xs text-muted">Register account</span>
+                          </a>
+                          <a href="https://app.upload-post.com/manage-users" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
+                            <span className="text-ink2 font-medium">2. Profiles</span>
+                            <span className="text-xs text-muted">Create & Connect</span>
+                          </a>
+                          <a href="https://app.upload-post.com/api-keys" target="_blank" rel="noopener noreferrer" className="p-2 border border-rule rounded-input hover:bg-paper3 transition-colors flex flex-col gap-1">
+                            <span className="text-ink2 font-medium">3. API Key</span>
+                            <span className="text-xs text-muted">Generate key</span>
+                          </a>
+                        </div>
+                        <br />
+                        <span className="text-muted">
+                          Keys are only stored in your browser. They are sent to the backend only to process your request, never stored server-side.
+                        </span>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -1848,7 +1891,7 @@ function App() {
 
           {/* View: SaaS Shorts */}
           {activeTab === 'saasshorts' && (
-            <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} managed={isManaged} freeMode={freeMode} serverGemini={serverGemini} />
+            <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} managed={isManaged} serverUploadPost={serverUploadPost} freeMode={freeMode} serverGemini={serverGemini} />
           )}
 
           {/* View: AI Agent */}
@@ -2016,6 +2059,7 @@ function App() {
               uploadPostKey={uploadPostKey}
               uploadUserId={uploadUserId}
               managed={isManaged}
+              serverUploadPost={serverUploadPost}
               freeMode={freeMode}
               serverGemini={serverGemini}
               onCreateClips={(sessionId) => {
@@ -2348,6 +2392,7 @@ function App() {
                           geminiApiKey={apiKey}
                           elevenLabsKey={elevenLabsKey}
                           isManaged={isManaged}
+                          serverUploadPost={serverUploadPost}
                           freeMode={freeMode}
                           serverGemini={serverGemini}
                           connectedPlatforms={(userProfiles.find((p) => p.username === uploadUserId) || userProfiles[0])?.connected ?? null}
@@ -2394,7 +2439,7 @@ function App() {
         isOpen={showKeyModal}
         onClose={() => setShowKeyModal(false)}
         eyebrow="SETUP"
-        title={!geminiOk && !uploadPostKey
+        title={!geminiOk && !uploadKeyOk
           ? 'Required API Keys Missing'
           : !geminiOk
             ? 'Gemini API Key Required'
@@ -2450,12 +2495,17 @@ function App() {
           </div>
 
           {/* Upload-Post block */}
-          <div className={`rounded-input p-4 space-y-2 border ${!uploadPostKey ? 'border-rule2' : 'border-rule opacity-70'}`}>
+          <div className={`rounded-input p-4 space-y-2 border ${(!uploadPostKey && !serverUploadPost) ? 'border-rule2' : 'border-rule opacity-70'}`}>
             <p className="text-xs font-medium text-ink flex items-center gap-2">
-              {uploadPostKey ? <Check size={12} className="text-ok" /> : <AlertTriangle size={12} className="text-warn" />}
-              Upload-Post API Key {uploadPostKey && <span className="text-ok">— set</span>}
+              {(uploadPostKey || serverUploadPost) ? <Check size={12} className="text-ok" /> : <AlertTriangle size={12} className="text-warn" />}
+              Upload-Post API Key {uploadPostKey ? <span className="text-ok">— set</span> : serverUploadPost && <span className="text-ok">— configured on server</span>}
             </p>
-            {!uploadPostKey && (
+            {serverUploadPost && (
+              <p className="text-xs text-muted">
+                The server provides this key via UPLOAD_POST_API_KEY. Choose a connected profile in Settings to publish.
+              </p>
+            )}
+            {!uploadPostKey && !serverUploadPost && (
               <>
                 <p className="text-xs text-muted">
                   Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts. Free tier available, no credit card needed.
@@ -2490,6 +2540,7 @@ function App() {
         uploadPostKey={uploadPostKey}
         uploadUserId={uploadUserId}
         isManaged={isManaged}
+        serverUploadPost={serverUploadPost}
       />
 
       {/* Pre-flight quality gate */}

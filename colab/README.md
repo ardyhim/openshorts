@@ -109,7 +109,8 @@ Notebook mengunduh `cloudflared` dan membuat quick tunnel `https://....trycloudf
 
 OpenShorts bisa memposting ke TikTok, Instagram Reels, dan YouTube Shorts lewat [Upload-Post](https://www.upload-post.com/). Free tier mereka (sekitar 10 upload/bulan, tanpa kartu kredit) cukup untuk mencoba.
 
-- Isi `UPLOAD_POST_API_KEY` di cell 2 **atau** masukkan di `Settings` dashboard.
+- Isi `UPLOAD_POST_API_KEY` di cell 2. Dashboard otomatis mendeteksi key server ini; kamu tinggal memilih profil yang terhubung di `Settings` (tidak perlu mengetik ulang key).
+- Bisa juga mengosongkannya di cell 2 lalu memasukkan key langsung di `Settings` dashboard. Key browser tidak disimpan di server.
 - Kalau tidak punya key: tetap bisa membuat video, lalu **download manual** dari dashboard.
 - Tidak ada API resmi gratis dari TikTok/Instagram untuk akun pribadi. Upload-Post adalah jalan termudah; alternatifnya upload manual.
 - YouTube juga bisa upload manual; kualitas dan fitur tidak berkurang.

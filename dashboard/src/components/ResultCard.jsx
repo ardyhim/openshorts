@@ -36,7 +36,7 @@ function formatDuration(clip) {
     return `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`;
 }
 
-export default function ResultCard({ clip, index, jobId, durable, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials, onEditClip = null, onReframeClip = null, onUpgrade = null }) {
+export default function ResultCard({ clip, index, jobId, durable, uploadPostKey, uploadUserId, geminiApiKey, elevenLabsKey, isManaged, serverUploadPost = false, onPlay, onPause, onBulkSubtitle, clipCount = 1, bulkProgress, initialState = null, onStateChange, connectedPlatforms = null, onConnectSocials, onEditClip = null, onReframeClip = null, onUpgrade = null }) {
     const [showModal, setShowModal] = useState(false);
     // The "why" line is clamped to two lines so cards in a row stay level;
     // when it overflows, a hover (desktop) or tap (touch) shows the whole
@@ -667,12 +667,13 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
         }
     };
 
-    // Managed (cloud plan/trial) users post with the server-side key — no BYOK needed
-    const canPost = isManaged || (uploadPostKey && uploadUserId);
+    // Managed (cloud plan/trial) users and self-hosted Colab servers with
+    // UPLOAD_POST_API_KEY set post with the server-side key — no BYOK needed.
+    const canPost = isManaged || ((!!uploadPostKey || serverUploadPost) && !!uploadUserId);
 
     const handlePost = async () => {
         if (!canPost) {
-            setPostResult({ success: false, msg: "Missing API Key or User ID." });
+            setPostResult({ success: false, msg: serverUploadPost ? "Select an Upload-Post profile first." : "Missing API Key or User ID." });
             return;
         }
 
@@ -699,12 +700,15 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             const payload = {
                 job_id: jobId,
                 clip_index: index,
-                api_key: uploadPostKey,
                 user_id: uploadUserId,
                 platforms: selectedPlatforms,
                 title: postTitle,
                 description: postDescription
             };
+            // Omit api_key when the server already has one (managed cloud or
+            // Colab's UPLOAD_POST_API_KEY); sending an empty string would
+            // override the env fallback on the backend.
+            if (uploadPostKey) payload.api_key = uploadPostKey;
 
             if (isScheduling && scheduleDate) {
                 // Convert to ISO-8601
@@ -1071,7 +1075,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 {!canPost && (
                     <div className="mb-4 px-3 py-2 rounded-input text-xs text-warn bg-[color-mix(in_oklab,var(--color-warn)_10%,transparent)] flex items-start gap-2">
                         <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                        <div className="lowercase">configure api key in settings first.</div>
+                        <div className="lowercase">{serverUploadPost ? 'select an upload-post profile in settings first.' : 'configure api key in settings first.'}</div>
                     </div>
                 )}
 

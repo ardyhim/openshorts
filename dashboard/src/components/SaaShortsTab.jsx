@@ -40,7 +40,7 @@ function saveCache(url, analysis, webResearch, scripts) {
   } catch { /* localStorage full */ }
 }
 
-export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uploadPostKey, uploadUserId, managed = false, freeMode = false, serverGemini = false }) {
+export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uploadPostKey, uploadUserId, managed = false, serverUploadPost = false, freeMode = false, serverGemini = false }) {
   // Managed (hosted plan): Gemini (script) + Upload-Post run server-side via the
   // bearer token — no BYOK Gemini key needed. fal.ai + ElevenLabs stay BYOK.
   // Free mode: actors/voice/images come from the server's local backends, so
@@ -1404,8 +1404,10 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                   <div className="card p-4 space-y-3 mt-2">
                     <h3 className="eyebrow">Publish to Social Media</h3>
 
-                    {!uploadPostKey ? (
+                    {(!uploadPostKey && !serverUploadPost && !managed) ? (
                       <p className="text-xs lowercase text-muted">Set your Upload-Post API key in Settings to enable publishing{freeMode ? ', or just download the video above.' : '.'}</p>
+                    ) : (!uploadUserId && !managed) ? (
+                      <p className="text-xs lowercase text-muted">Select a connected Upload-Post profile in Settings to enable publishing{freeMode ? ', or just download the video above.' : '.'}</p>
                     ) : (
                       <>
                         {/* Platform toggles */}
@@ -1468,12 +1470,13 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                             try {
                               const payload = {
                                 job_id: jobId,
-                                api_key: uploadPostKey,
                                 user_id: uploadUserId,
                                 platforms: selected,
                                 title: genResult.script?.title,
                                 description: genResult.script?.caption || genResult.script?.full_narration,
                               };
+                              // Empty api_key would override the backend env fallback.
+                              if (uploadPostKey) payload.api_key = uploadPostKey;
                               if (isScheduling && scheduleDate) {
                                 payload.scheduled_date = new Date(scheduleDate).toISOString();
                                 payload.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;

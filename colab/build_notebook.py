@@ -99,6 +99,7 @@ REPO_BRANCH = "main" #@param {type:"string"}
 
 #@markdown ### API key (opsional, gratis)
 #@markdown Gemini: https://aistudio.google.com/apikey — tanpa kartu kredit.
+#@markdown Upload-Post: free tier ±10 upload/bulan. Kalau diisi di sini, dashboard otomatis memakai key server — cukup pilih profil yang terhubung.
 GEMINI_API_KEY = "" #@param {type:"string"}
 HF_TOKEN = "" #@param {type:"string"}
 UPLOAD_POST_API_KEY = "" #@param {type:"string"}
