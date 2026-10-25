@@ -43,6 +43,8 @@ Notebook ini menjalankan **OpenShorts versi free mode** di Google Colab (disaran
 2. **Tidak perlu upload file.** Cell 4 otomatis menjalankan `git clone` dari <https://github.com/ardyhim/openshorts.git> ke `/content/openshorts`. Jalankan ulang cell 4 kapan pun untuk mengambil update terbaru; `.env`, `output/`, dan cache tetap aman. Opsi Upload ZIP / Google Drive hanya cadangan offline.
 3. **Opsional tetapi sangat disarankan:** API key Gemini gratis dari [Google AI Studio](https://aistudio.google.com/apikey). Tanpa key, AI Shorts dan YouTube Studio tetap jalan dengan fallback lokal, tetapi **Clip Generator butuh Gemini** (atau server LLM lokal via `LLM_BASE_URL`) untuk memilih momen viral.
 
+> **Python 3.13:** MediaPipe 0.10.21 tidak punya wheel untuk Python 3.13, jadi cell 5 otomatis melewatinya dan app memakai **OpenCV Haar** (`face_detection_compat.py`) untuk face tracking. Di Python <= 3.12, MediaPipe tetap dipakai. Tidak ada langkah manual.
+
 > **Peringatan privasi:** opsi tunnel **Cloudflared** membuat dashboard bisa diakses publik tanpa login. Gunakan **Colab proxy** (default) kalau tidak ingin orang lain membuka GPU dan hasil video Anda.
 
 > **Lisensi model:** **Wav2Lip hanya untuk riset/personal/non-komersial** (lihat README upstream). Untuk konten komersial, set `WAV2LIP_DISABLE=1` di `.env` agar pipeline memakai still image + audio, atau ganti dengan model berlisensi komersial. RealVisXL V4.0 memakai lisensi OpenRAIL++-M.

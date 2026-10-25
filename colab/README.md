@@ -16,6 +16,8 @@ Folder ini berisi setup untuk menjalankan **OpenShorts** di Google Colab **tanpa
 
 > **Penting:** notebook ini **tidak** memakai Docker. Colab tidak menyediakan Docker, jadi server FastAPI, dashboard, ffmpeg, dan model berjalan langsung di VM Colab.
 
+> **Python 3.13:** Colab saat ini memakai Python 3.13. MediaPipe 0.10.21 tidak punya wheel untuk versi itu (dan NumPy 1.x juga tidak), jadi notebook otomatis memakai **OpenCV Haar** (`face_detection_compat.py`) untuk face tracking. Di Python <= 3.12, MediaPipe BlazeFace tetap dipakai. Tidak ada yang perlu diatur manual.
+
 ---
 
 ## 1. Yang diganti
