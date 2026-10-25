@@ -84,17 +84,19 @@ else:
 code(r'''
 #@title 2. Konfigurasi utama { display-mode: "form" }
 #@markdown ### Sumber project
-#@markdown **Upload ZIP** paling mudah. File tersedia di `colab/openshorts-free-colab.zip`.
-PROJECT_SOURCE = "Upload ZIP" #@param ["Upload ZIP", "Google Drive", "Git clone"]
+#@markdown **Git clone** (default): ambil/update langsung dari GitHub, tanpa upload file.
+#@markdown Upload ZIP / Google Drive hanya cadangan kalau GitHub tidak bisa diakses.
+PROJECT_SOURCE = "Git clone" #@param ["Git clone", "Upload ZIP", "Google Drive"]
 PROJECT_DIR = "/content/openshorts" #@param {type:"string"}
+UPDATE_PROJECT = True #@param {type:"boolean"}
 RESET_PROJECT = False #@param {type:"boolean"}
 
 #@markdown ### Lokasi ZIP (abaikan kalau memilih Git clone)
 ZIP_PATH = "/content/openshorts-free-colab.zip" #@param {type:"string"}
 DRIVE_ZIP_PATH = "/content/drive/MyDrive/openshorts-free-colab.zip" #@param {type:"string"}
 
-#@markdown ### Git clone (hanya untuk fork yang sudah berisi free mode)
-REPO_URL = "" #@param {type:"string"}
+#@markdown ### Git clone
+REPO_URL = "https://github.com/ardyhim/openshorts.git" #@param {type:"string"}
 REPO_BRANCH = "main" #@param {type:"string"}
 
 #@markdown ### API key (opsional, gratis)
@@ -209,7 +211,7 @@ print("npm    :", subprocess.run(["npm", "--version"], capture_output=True, text
 ''')
 
 code(r'''
-#@title 4. Ambil project OpenShorts
+#@title 4. Ambil / update project OpenShorts
 import os, shutil, subprocess, zipfile
 from pathlib import Path
 
@@ -252,9 +254,53 @@ def install_from_root(root):
     print("Project disalin ke:", PROJECT_DIR)
 
 
-if looks_like_project(PROJECT_DIR) and not RESET_PROJECT:
-    print("Project free mode sudah ada; tidak mengunduh ulang.")
+def git(*args, check=True):
+    return subprocess.run(["git", "-C", PROJECT_DIR, *args], check=check)
+
+
+def update_git_project():
+    # Folder hasil upload ZIP lama tidak punya .git. Jadikan repo git di tempat
+    # supaya update berikutnya mudah, tanpa menghapus .env/output/cache:
+    # reset --hard hanya menimpa file yang dilacak git.
+    if not (Path(PROJECT_DIR) / ".git").is_dir():
+        print("Folder lama bukan git repo; mengubahnya menjadi clone git...")
+        git("init", "-q")
+    remotes = subprocess.run(
+        ["git", "-C", PROJECT_DIR, "remote"],
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+    if "origin" in remotes:
+        git("remote", "set-url", "origin", REPO_URL)
+    else:
+        git("remote", "add", "origin", REPO_URL)
+
+    print("Memperbarui project dari GitHub...")
+    git("fetch", "--depth", "1", "origin", REPO_BRANCH)
+    git("reset", "--hard", "FETCH_HEAD")
+    commit = subprocess.run(
+        ["git", "-C", PROJECT_DIR, "log", "-1", "--format=%h %s"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    print("Versi terbaru:", commit)
+
+
+if os.path.exists(PROJECT_DIR) and RESET_PROJECT:
+    print("Menghapus project lama:", PROJECT_DIR)
+    shutil.rmtree(PROJECT_DIR)
+
+if looks_like_project(PROJECT_DIR):
+    print("Project free mode sudah ada:", PROJECT_DIR)
+    if PROJECT_SOURCE == "Git clone" and UPDATE_PROJECT:
+        update_git_project()
+    elif PROJECT_SOURCE == "Git clone":
+        print("UPDATE_PROJECT=False; memakai versi yang ada saat ini.")
 else:
+    if os.path.exists(PROJECT_DIR):
+        raise RuntimeError(
+            f"{PROJECT_DIR} sudah ada tetapi bukan project free mode. "
+            "Set RESET_PROJECT=True atau hapus folder tersebut."
+        )
+
     zip_path = None
     if PROJECT_SOURCE == "Upload ZIP":
         if not os.path.exists(ZIP_PATH):
@@ -281,16 +327,13 @@ else:
     elif PROJECT_SOURCE == "Git clone":
         if not REPO_URL.strip():
             raise ValueError(
-                "REPO_URL kosong. Isi URL fork GitHub yang sudah berisi free mode, "
-                "atau pilih Upload ZIP."
+                "REPO_URL kosong. Isi URL repo GitHub (misalnya "
+                "https://github.com/ardyhim/openshorts.git), atau pilih Upload ZIP."
             )
-        if os.path.exists(PROJECT_DIR) and RESET_PROJECT:
-            shutil.rmtree(PROJECT_DIR)
-        if not os.path.exists(PROJECT_DIR):
-            subprocess.run(
-                ["git", "clone", "--depth", "1", "--branch", REPO_BRANCH, REPO_URL, PROJECT_DIR],
-                check=True,
-            )
+        subprocess.run(
+            ["git", "clone", "--depth", "1", "--branch", REPO_BRANCH, REPO_URL, PROJECT_DIR],
+            check=True,
+        )
     else:
         raise ValueError("PROJECT_SOURCE tidak dikenal.")
 
@@ -313,8 +356,8 @@ else:
 
 if not looks_like_project(PROJECT_DIR):
     raise RuntimeError(
-        "Project tidak valid. Kalau memakai Git clone, pastikan fork sudah berisi "
-        "free_backends.py dan colab/requirements-colab.txt (bukan repo original)."
+        "Project tidak valid. Pastikan repo berisi free_backends.py dan "
+        "colab/requirements-colab.txt (ardyhim/openshorts sudah berisi keduanya)."
     )
 
 os.chdir(PROJECT_DIR)
@@ -337,7 +380,13 @@ def pip(*args):
 
 
 # NumPy 1.26 + OpenCV 4.10 + protobuf 4.x ikut dipasang dari requirements.
-pip("install", "-q", "--no-warn-script-location", "-r", "colab/requirements-colab.txt")
+try:
+    pip("install", "-q", "--no-warn-script-location", "-r", "colab/requirements-colab.txt")
+except subprocess.CalledProcessError:
+    print("\n❌ Install dependensi gagal. Lihat baris ERROR dari pip di atas.")
+    print("   Pastikan cell 4 memakai kode terbaru (UPDATE_PROJECT=True), lalu ulangi cell ini.")
+    print("   Konflik yang umum: py3langid versi lama butuh NumPy 2, sedangkan mediapipe butuh NumPy 1.x.")
+    raise
 
 # MediaPipe 0.10.21 masih punya mp.solutions (dipakai face tracking), tetapi
 # deklarasi dependensinya menarik NumPy 2 dan JAX. Kita hanya butuh graph

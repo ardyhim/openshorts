@@ -18,7 +18,9 @@ ultralytics==8.4.46
 tqdm==4.67.3
 yt-dlp[default]
 faster-whisper==1.2.1
-py3langid==0.3.0
+# py3langid 0.3.0 requires NumPy >= 2 for Python >= 3.9, which conflicts with
+# mediapipe 0.10.21 (NumPy < 2). 0.2.2 exposes the same classify() API.
+py3langid==0.2.2
 google-genai==1.75.0
 python-dotenv==1.2.2
 boto3==1.43.4

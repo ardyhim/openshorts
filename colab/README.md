@@ -2,11 +2,15 @@
 
 Folder ini berisi setup untuk menjalankan **OpenShorts** di Google Colab **tanpa API berbayar**. Semua fitur inti tetap ada, tetapi provider mahal diganti dengan model lokal di GPU T4 atau layanan gratis.
 
+**Buka langsung di Colab (tanpa download/upload apa pun):**
+
+<https://colab.research.google.com/github/ardyhim/openshorts/blob/main/colab/OpenShorts_Free_Colab.ipynb>
+
 | File | Fungsi |
 |---|---|
 | `OpenShorts_Free_Colab.ipynb` | Notebook utama: cek GPU, install, build dashboard, jalankan server, buka URL. |
 | `requirements-colab.txt` | Dependensi Python yang aman untuk Colab (tanpa mengganti torch bawaan). |
-| `openshorts-free-colab.zip` | Source project lengkap yang di-upload ke Colab. |
+| `openshorts-free-colab.zip` | Cadangan offline; tidak dipakai secara default karena notebook memakai Git clone. |
 | `build_zip.py` | Membuat ulang ZIP dari repo: `python colab/build_zip.py`. |
 | `build_notebook.py` | Generator notebook (untuk maintainer): `python colab/build_notebook.py`. |
 
@@ -39,14 +43,15 @@ Yang **masih memakai internet gratis**:
 
 ## 2. Mulai cepat
 
-### 2.1 Siapkan file
+### 2.1 Buka notebook
 
-1. Download folder/repo ini, atau minimal:
-   - `colab/OpenShorts_Free_Colab.ipynb`
-   - `colab/openshorts-free-colab.zip`
-2. Buka [Google Colab](https://colab.research.google.com/).
-3. `File` → `Upload notebook` → pilih `OpenShorts_Free_Colab.ipynb`.
-4. `Runtime` → `Change runtime type` → **T4 GPU** → `Save`.
+Tidak perlu download repo atau upload ZIP.
+
+1. Buka **langsung** notebook ini di Colab: <https://colab.research.google.com/github/ardyhim/openshorts/blob/main/colab/OpenShorts_Free_Colab.ipynb>
+2. `Runtime` → `Change runtime type` → **T4 GPU** → `Save`.
+3. Cell 4 otomatis menjalankan `git clone` dari <https://github.com/ardyhim/openshorts.git> ke `/content/openshorts`.
+
+Kalau ingin memakai notebook dari file lokal: `File` → `Upload notebook`. ZIP project tetap tersedia sebagai cadangan offline, tetapi tidak diperlukan.
 
 ### 2.2 API key Gemini (gratis, opsional tetapi disarankan)
 
@@ -70,10 +75,12 @@ Yang **masih memakai internet gratis**:
 ### 2.3 Jalankan
 
 1. Jalankan cell **1–14** berurutan, atau `Runtime` → `Run all`.
-2. Saat cell **4** berjalan, pilih file `openshorts-free-colab.zip` dari komputer.
+2. Cell **4** otomatis clone repo GitHub ke `/content/openshorts` — tidak ada file yang perlu di-upload.
 3. Tunggu install + build dashboard (sekitar 3–6 menit, tergantung Colab).
 4. Cell **11** menampilkan tombol **Buka OpenShorts**.
 5. Selesai. Video dan thumbnail muncul di folder `output/`.
+
+> Kalau menjalankan ulang cell **4**, `UPDATE_PROJECT=True` akan mengambil versi terbaru dari GitHub. File `.env`, `output/`, dan cache model tetap aman karena tidak dilacak git.
 
 > Pertama kali memakai AI Shorts, model SDXL (~7 GB) dan Wav2Lip (~520 MB) diunduh otomatis. Ini bisa memakan 5–15 menit. Untuk mengunduh lebih awal, jalankan cell **8** dengan `PRELOAD_SDXL=True`.
 
@@ -168,16 +175,16 @@ OpenShorts bisa memposting ke TikTok, Instagram Reels, dan YouTube Shorts lewat 
 
 ---
 
-## 8. Kalau memakai fork GitHub sendiri
+## 8. Update project / memakai fork sendiri
 
-Kalau sudah push perubahan ini ke GitHub, tidak perlu upload ZIP:
+Default notebook memakai repo <https://github.com/ardyhim/openshorts.git> dan **tidak perlu upload ZIP**.
 
-1. Di cell 2, pilih `PROJECT_SOURCE = "Git clone"`.
-2. Isi `REPO_URL` dengan URL fork Anda (harus berisi `free_backends.py` dan `colab/requirements-colab.txt`).
-3. `REPO_BRANCH` default `main`.
-4. Jalankan notebook dari cell 4.
+- Untuk mengambil update terbaru: jalankan ulang cell **4** dengan `UPDATE_PROJECT=True`.
+- Untuk clone ulang dari nol (menghapus folder project): set `RESET_PROJECT=True`, lalu jalankan cell **4**.
+- Untuk fork sendiri: ganti `REPO_URL` di cell **2** dengan URL fork Anda. Pastikan fork berisi `free_backends.py` dan `colab/requirements-colab.txt`.
+- `REPO_BRANCH` default `main`.
 
-Repo original `ardyhim/openshorts` **belum** berisi free mode; clone dari sana akan ditolak oleh pengecekan notebook.
+`git reset --hard` saat update hanya membuang perubahan pada file yang dilacak git. `.env`, `output/`, `uploads/`, dan cache model tidak dihapus. Folder lama dari ZIP yang belum punya `.git` otomatis diubah menjadi git repo oleh cell **4**, jadi tidak perlu clone ulang dari nol.
 
 ---
 
@@ -187,6 +194,7 @@ Repo original `ardyhim/openshorts` **belum** berisi free mode; clone dari sana a
 |---|---|
 | `GPU tidak terdeteksi` | Runtime belum T4. `Runtime` → `Change runtime type` → `T4 GPU`, lalu ulang dari cell 1. |
 | `mediapipe` / `numpy` error | Pastikan memakai `requirements-colab.txt` dari folder ini. Jangan `pip install mediapipe` versi terbaru: versi 0.10.21 masih punya `mp.solutions`, dan butuh NumPy 1.x. |
+| `pip install` gagal / `ResolutionImpossible` | Jalankan ulang cell 4 dengan `UPDATE_PROJECT=True` lalu cell 5. `requirements-colab.txt` memakai `py3langid==0.2.2`; versi 0.3.0 memaksa NumPy 2 dan bentrok dengan mediapipe. |
 | `CUDA out of memory` | Restart runtime, turunkan `IMAGE_STEPS` ke 12–16, jalankan satu video sekaligus. |
 | SDXL lambat / download macet | Jalankan cell 8 `PRELOAD_SDXL=True`; cek koneksi dan sisa disk. |
 | Wav2Lip gagal | Pipeline otomatis memakai still image + audio. Cek `server.log`. |
