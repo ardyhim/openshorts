@@ -161,6 +161,7 @@ OpenShorts bisa memposting ke TikTok, Instagram Reels, dan YouTube Shorts lewat 
 /content/openshorts/
 ├── app.py                  # FastAPI + static dashboard
 ├── free_backends.py        # semua provider gratis/lokal
+├── face_detection_compat.py # MediaPipe/OpenCV face detection
 ├── saasshorts.py           # pipeline AI Shorts
 ├── thumbnail.py            # YouTube Studio
 ├── dashboard/dist/         # hasil build Vite
@@ -193,8 +194,8 @@ Default notebook memakai repo <https://github.com/ardyhim/openshorts.git> dan **
 | Masalah | Penyebab / solusi |
 |---|---|
 | `GPU tidak terdeteksi` | Runtime belum T4. `Runtime` → `Change runtime type` → `T4 GPU`, lalu ulang dari cell 1. |
-| `mediapipe` / `numpy` error | Pastikan memakai `requirements-colab.txt` dari folder ini. Jangan `pip install mediapipe` versi terbaru: versi 0.10.21 masih punya `mp.solutions`, dan butuh NumPy 1.x. |
-| `pip install` gagal / `ResolutionImpossible` | Jalankan ulang cell 4 dengan `UPDATE_PROJECT=True` lalu cell 5. `requirements-colab.txt` memakai `py3langid==0.2.2`; versi 0.3.0 memaksa NumPy 2 dan bentrok dengan mediapipe. |
+| `mediapipe` / `numpy` error | MediaPipe hanya dipasang di Python <= 3.12. Di Colab Python 3.13, app otomatis memakai OpenCV Haar (`face_detection_compat.py`), jadi `mediapipe` tidak diperlukan. Jangan `pip install mediapipe` versi terbaru: `mp.solutions` sudah dihapus. |
+| `pip install` gagal / `ResolutionImpossible` | Jalankan ulang cell 4 dengan `UPDATE_PROJECT=True` lalu cell 5. `requirements-colab.txt` memakai `py3langid==0.2.2` dan marker NumPy/OpenCV per versi Python. Versi 0.3.0 memaksa NumPy 2 dan bentrok dengan Python <= 3.12. |
 | `CUDA out of memory` | Restart runtime, turunkan `IMAGE_STEPS` ke 12–16, jalankan satu video sekaligus. |
 | SDXL lambat / download macet | Jalankan cell 8 `PRELOAD_SDXL=True`; cek koneksi dan sisa disk. |
 | Wav2Lip gagal | Pipeline otomatis memakai still image + audio. Cek `server.log`. |
@@ -222,14 +223,21 @@ Default notebook memakai repo <https://github.com/ardyhim/openshorts.git> dan **
 Free mode juga bisa jalan di Linux dengan GPU/CPU:
 
 ```bash
-# Python 3.11/3.12, ffmpeg, Node.js >= 18
+# Python 3.11–3.13, ffmpeg, Node.js >= 18
 # 1) Pasang torch/torchvision DULU sesuai CUDA Anda (jangan pakai pin requirements.txt
 #    kalau versi tersebut tidak cocok). Contoh untuk CUDA 12.4:
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 
 # 2) Dependensi aplikasi + free mode. File ini sengaja tidak menyentuh torch.
 pip install -r colab/requirements-colab.txt
-pip install --no-deps "mediapipe==0.10.21"
+# MediaPipe hanya untuk Python <= 3.12; Python 3.13 memakai OpenCV Haar.
+python - <<'PY'
+import subprocess, sys
+if sys.version_info < (3, 13):
+    subprocess.run([sys.executable, "-m", "pip", "install", "--no-deps", "mediapipe==0.10.21"], check=True)
+else:
+    print("Python 3.13: memakai OpenCV Haar, mediapipe dilewati.")
+PY
 
 # 3) Dashboard + server
 cd dashboard && npm ci && npm run build && cd ..
@@ -241,6 +249,7 @@ FREE_MODE=1 SERVE_DASHBOARD=1 \
 Tanpa GPU, ganti `WHISPER_DEVICE=cuda`/`WHISPER_COMPUTE=float16` dengan
 `WHISPER_DEVICE=cpu`/`WHISPER_COMPUTE=int8`; SDXL akan sangat lambat atau bisa
 dimatikan dengan `FREE_IMAGE_MODEL=""` (AI Shorts memakai fallback gambar polos).
-Di Windows, `pip install -r colab/requirements-colab.txt` juga memasang NumPy 1.x;
-pastikan torch/torchvision yang sudah ada kompatibel. Cara paling aman tetap Colab
-(semua dependensi diuji untuk Linux/T4).
+Di Windows/Linux, `pip install -r colab/requirements-colab.txt` memilih NumPy/OpenCV
+otomatis: Python <= 3.12 memakai NumPy 1.x + OpenCV 4.10, Python 3.13 memakai
+NumPy 2.x + OpenCV 4.12. Pastikan torch/torchvision yang sudah ada kompatibel.
+Cara paling aman tetap Colab (semua dependensi diuji untuk Linux/T4).

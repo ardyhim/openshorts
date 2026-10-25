@@ -1,15 +1,19 @@
-# OpenShorts free-mode dependencies for Google Colab (Python 3.12, T4 GPU).
+# OpenShorts free-mode dependencies for Google Colab (Python 3.12/3.13, T4 GPU).
 #
 # IMPORTANT
 #   * torch / torchvision are deliberately NOT listed here. Colab already ships
 #     a CUDA-enabled pair; reinstalling the pins from requirements.txt would
 #     either download a CPU build or spend 10+ minutes replacing a working one.
-#   * mediapipe is installed separately with --no-deps by the notebook:
+#   * mediapipe is optional. On Python <= 3.12 the notebook installs it
+#     separately with --no-deps:
 #         pip install --no-deps "mediapipe==0.10.21"
 #     It needs NumPy 1.x, and the legacy mp.solutions API the app uses was
-#     removed from newer releases. The notebook therefore pins numpy<2 below.
-#   * Installing NumPy 1.26 also means OpenCV must stay below 4.12 (4.12+
-#     requires NumPy 2). OpenCV 4.10/4.11 are the last 1.x-compatible wheels.
+#     removed from newer releases.
+#   * Python 3.13 (current Colab) has no mediapipe wheel with mp.solutions and
+#     no NumPy 1.x wheels, so it uses NumPy 2 + OpenCV 4.12 and the app falls
+#     back to OpenCV's Haar cascade (face_detection_compat.py).
+#   * Python <= 3.12 keeps NumPy 1.26 because mediapipe 0.10.21 needs it. That
+#     also means OpenCV must stay below 4.12 (4.12+ requires NumPy 2).
 
 # --- Base application (requirements.txt minus torch/torchvision/mediapipe) ---
 scenedetect==0.7
@@ -18,8 +22,9 @@ ultralytics==8.4.46
 tqdm==4.67.3
 yt-dlp[default]
 faster-whisper==1.2.1
-# py3langid 0.3.0 requires NumPy >= 2 for Python >= 3.9, which conflicts with
-# mediapipe 0.10.21 (NumPy < 2). 0.2.2 exposes the same classify() API.
+# py3langid 0.3.0 forces NumPy >= 2, which breaks the Python <= 3.12
+# mediapipe path (NumPy 1.x). 0.2.2 exposes the same classify() API and works
+# with both NumPy 1.x and 2.x.
 py3langid==0.2.2
 google-genai==1.75.0
 python-dotenv==1.2.2
@@ -44,9 +49,14 @@ safetensors==0.6.2
 # --- Wav2Lip needs librosa/scipy (soundfile and numba come with librosa) ---
 librosa==0.11.0
 
-# --- NumPy/OpenCV/protobuf versions compatible with mediapipe 0.10.21 ---
-numpy>=1.26.0,<2.0
-opencv-python==4.10.0.84
+# --- NumPy/OpenCV/protobuf versions ---
+# Python <= 3.12: mediapipe 0.10.21 needs NumPy 1.x and OpenCV < 4.12.
+# Python 3.13: NumPy 1.x has no wheels at all, so use NumPy 2 + OpenCV 4.12
+# (still bundles the Haar cascade used by face_detection_compat.py).
+numpy>=1.26.0,<2.0; python_version < "3.13"
+opencv-python==4.10.0.84; python_version < "3.13"
+numpy>=2.2,<2.3; python_version >= "3.13"
+opencv-python==4.12.0.88; python_version >= "3.13"
 protobuf>=4.25.3,<5
 absl-py
 attrs

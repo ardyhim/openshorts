@@ -18,7 +18,7 @@ import math
 import numpy as np
 from tqdm import tqdm
 import yt_dlp
-import mediapipe as mp
+from face_detection_compat import FaceDetection
 # import whisper (replaced by faster_whisper inside function)
 from google import genai
 from google.genai import types as genai_types
@@ -91,10 +91,10 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
 # volume mounted over the workdir doesn't trigger a re-download at startup.
 model = YOLO(os.environ.get("YOLO_MODEL_PATH", "yolov8n.pt"))
 
-# --- MediaPipe Setup ---
-# Use standard Face Detection (BlazeFace) for speed
-mp_face_detection = mp.solutions.face_detection
-face_detection = mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+# --- Face detection setup ---
+# MediaPipe BlazeFace when a compatible wheel exists; OpenCV Haar otherwise
+# (Colab's Python 3.13 has no mediapipe 0.10.x wheel with mp.solutions).
+face_detection = FaceDetection(model_selection=1, min_detection_confidence=0.5)
 
 # Consecutive detections a large target move must survive before the camera
 # follows it (see SmoothedCameraman.update_target). Env-overridable so the

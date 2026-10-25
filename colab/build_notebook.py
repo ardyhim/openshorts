@@ -40,7 +40,7 @@ Notebook ini menjalankan **OpenShorts versi free mode** di Google Colab (disaran
 **Yang perlu disiapkan**
 
 1. Runtime Colab dengan GPU: `Runtime` → `Change runtime type` → `T4 GPU`.
-2. File ZIP project `openshorts-free-colab.zip` (ada di folder `colab/` repo ini). Kalau sudah punya fork GitHub yang berisi free mode, bisa juga memakai opsi **Git clone**.
+2. **Tidak perlu upload file.** Cell 4 otomatis menjalankan `git clone` dari <https://github.com/ardyhim/openshorts.git> ke `/content/openshorts`. Jalankan ulang cell 4 kapan pun untuk mengambil update terbaru; `.env`, `output/`, dan cache tetap aman. Opsi Upload ZIP / Google Drive hanya cadangan offline.
 3. **Opsional tetapi sangat disarankan:** API key Gemini gratis dari [Google AI Studio](https://aistudio.google.com/apikey). Tanpa key, AI Shorts dan YouTube Studio tetap jalan dengan fallback lokal, tetapi **Clip Generator butuh Gemini** (atau server LLM lokal via `LLM_BASE_URL`) untuk memilih momen viral.
 
 > **Peringatan privasi:** opsi tunnel **Cloudflared** membuat dashboard bisa diakses publik tanpa login. Gunakan **Colab proxy** (default) kalau tidak ingin orang lain membuka GPU dan hasil video Anda.
@@ -379,19 +379,32 @@ def pip(*args):
     subprocess.run([sys.executable, "-m", "pip", *args], check=True, env=pip_env)
 
 
-# NumPy 1.26 + OpenCV 4.10 + protobuf 4.x ikut dipasang dari requirements.
+# Marker di requirements memilih NumPy/OpenCV sesuai versi Python:
+# <= 3.12 -> NumPy 1.26 + OpenCV 4.10 (untuk mediapipe);
+# 3.13    -> NumPy 2.x + OpenCV 4.12 (Haar cascade tetap tersedia).
 try:
     pip("install", "-q", "--no-warn-script-location", "-r", "colab/requirements-colab.txt")
 except subprocess.CalledProcessError:
     print("\n❌ Install dependensi gagal. Lihat baris ERROR dari pip di atas.")
     print("   Pastikan cell 4 memakai kode terbaru (UPDATE_PROJECT=True), lalu ulangi cell ini.")
-    print("   Konflik yang umum: py3langid versi lama butuh NumPy 2, sedangkan mediapipe butuh NumPy 1.x.")
+    print("   Konflik yang umum: py3langid versi lama butuh NumPy 2, sedangkan requirements memakai NumPy 1.x.")
     raise
 
-# MediaPipe 0.10.21 masih punya mp.solutions (dipakai face tracking), tetapi
-# deklarasi dependensinya menarik NumPy 2 dan JAX. Kita hanya butuh graph
-# vision bawaan, jadi pasang tanpa dependensi; dependency lain sudah ada di atas.
-pip("install", "-q", "--no-warn-script-location", "--no-deps", "mediapipe==0.10.21")
+# MediaPipe 0.10.21 adalah rilis terakhir yang masih punya mp.solutions
+# (dipakai face tracking). Wheel-nya hanya tersedia untuk Python <= 3.12;
+# Colab sekarang memakai Python 3.13, jadi di sana app otomatis memakai
+# fallback OpenCV Haar cascade di face_detection_compat.py.
+if sys.version_info < (3, 13):
+    # Deklarasi dependensi mediapipe menarik NumPy 2 dan JAX. Kita hanya butuh
+    # graph vision bawaan, jadi pasang tanpa dependensi; sisanya sudah ada.
+    pip("install", "-q", "--no-warn-script-location", "--no-deps", "mediapipe==0.10.21")
+    print("mediapipe  : dipasang (BlazeFace)")
+else:
+    print(
+        "mediapipe  : dilewati di Python "
+        f"{sys.version_info.major}.{sys.version_info.minor} "
+        "(belum ada wheel dengan mp.solutions); memakai OpenCV Haar."
+    )
 
 print("\nSelesai. torch/torchvision tidak diubah:")
 try:
@@ -714,9 +727,12 @@ code(r'''
 import os, subprocess, sys
 
 check_code = r"""
+import sys
 import numpy as np
 print("numpy      :", np.__version__)
-assert np.__version__.startswith("1."), "NumPy harus 1.x untuk mediapipe 0.10.21"
+print("python     :", sys.version.split()[0])
+if sys.version_info < (3, 13):
+    assert np.__version__.startswith("1."), "NumPy harus 1.x untuk mediapipe 0.10.21"
 
 import cv2
 print("opencv     :", cv2.__version__)
@@ -726,10 +742,11 @@ print("torch      :", torch.__version__, "| CUDA:", torch.cuda.is_available())
 if torch.cuda.is_available():
     print("gpu        :", torch.cuda.get_device_name(0))
 
-import mediapipe as mp
-print("mediapipe  :", mp.__version__)
-mp.solutions.face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
-print("face detect: OK")
+from face_detection_compat import FaceDetection
+detector = FaceDetection(model_selection=1, min_detection_confidence=0.5)
+print("face detect:", detector.backend)
+result = detector.process(np.zeros((240, 320, 3), dtype=np.uint8))
+print("face detect: OK (deteksi pada frame kosong:", len(result.detections or []), "wajah)")
 
 import edge_tts, diffusers, transformers, faster_whisper
 print("free stack : OK (edge-tts, diffusers, transformers, faster-whisper)")
@@ -1039,7 +1056,7 @@ md(r"""
 | Gejala | Solusi |
 |---|---|
 | `GPU tidak terdeteksi` | `Runtime` → `Change runtime type` → `T4 GPU`, lalu jalankan ulang dari cell 1. |
-| `numpy` bukan 1.x / `mediapipe` gagal import | Jalankan ulang cell 5. Jangan install `mediapipe` versi terbaru; versi 0.10.21 dibutuhkan karena masih punya `mp.solutions`. |
+| `numpy` bukan 1.x / `mediapipe` gagal import | Jalankan ulang cell 5. MediaPipe 0.10.21 hanya dipasang di Python <= 3.12; di Python 3.13 app otomatis memakai OpenCV Haar dan tidak butuh MediaPipe. Jangan install `mediapipe` versi terbaru: `mp.solutions` sudah dihapus. |
 | `CUDA out of memory` | Hentikan server (cell 13), restart runtime, turunkan `IMAGE_STEPS` ke 12–16, dan jangan jalankan dua video bersamaan. |
 | Model SDXL terasa lambat / tidak muncul | Unduh dulu lewat cell 8 (`PRELOAD_SDXL=True`). Generation pertama memakan 5–15 menit. |
 | `Wav2Lip` gagal | Normal: pipeline otomatis memakai still image + audio. Cek log; kualitas lipsync butuh checkpoint ~520 MB. |
