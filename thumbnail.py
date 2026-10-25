@@ -4,6 +4,8 @@ import uuid
 import json
 from concurrent.futures import ThreadPoolExecutor
 
+import free_backends
+
 from google import genai
 from google.genai import types
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -66,6 +68,10 @@ def analyze_video_for_titles(api_key, video_path, transcript=None):
     diverse top 10 and pairs each title with a 1-4 word thumbnail hook.
     Returns: { "titles", "thumbnail_texts", "transcript_summary", "language",
                "segments", "video_duration", "recommended" }
+
+    With no key (free mode / no Gemini configured) the transcript still gets
+    transcribed and the titles come from the deterministic free fallback; the
+    Studio stays usable end-to-end without an API key.
     """
     if transcript is None:
         from main import transcribe_video
@@ -73,6 +79,11 @@ def analyze_video_for_titles(api_key, video_path, transcript=None):
         transcript = transcribe_video(video_path)
     else:
         print("🎬 [Thumbnail] Using pre-computed transcript (Whisper already done)...")
+
+    if not api_key:
+        import free_backends
+        print("🆓 [Thumbnail] No Gemini key — using transcript-based free titles.")
+        return free_backends.free_title_data(transcript)
 
     client = genai.Client(api_key=api_key)
     frames = _frame_parts(video_path)
@@ -197,6 +208,11 @@ def refine_titles(api_key, context, user_message, conversation_history=None):
     """
     Takes video context + user feedback and returns refined title suggestions.
     """
+    if not api_key:
+        import free_backends
+        print("🆓 [Thumbnail] No Gemini key — refining titles locally.")
+        return free_backends.free_refine_titles(context, user_message)
+
     client = genai.Client(api_key=api_key)
 
     history_text = ""
@@ -372,7 +388,15 @@ def plan_thumbnail_concepts(client, title, count, video_context="", extra_prompt
     One text call that designs `count` DIFFERENT thumbnails before any pixel is
     drawn. Asking the image model to invent the concept and render it in one
     go gives N variations of one idea; splitting it gives N ideas.
+
+    `client is None` means free mode: return frame-based concepts with the same
+    shape so the renderer does not need to branch.
     """
+    if client is None:
+        import free_backends
+        return free_backends.free_thumbnail_concepts(
+            client, title, count, thumbnail_text_hint=thumbnail_text_hint)
+
     person_line = ("A real photo of the presenter is provided and MUST be the focal point, "
                    "with a clear, natural expression that reads at small size (no caricature)."
                    if has_person else
@@ -565,11 +589,12 @@ def _ai_save_kwargs(img):
     return kwargs
 
 
-def finalize_thumbnail(img, out_path):
+def finalize_thumbnail(img, out_path, ai_generated=True):
     """Cover-crop to 1280x720 and save a JPEG under YouTube's 2 MB limit.
 
-    Every file that leaves here is machine-marked as AI-generated — see
-    AI_XMP_PACKET.
+    Generated images are machine-marked as AI-generated — see AI_XMP_PACKET.
+    Free-mode thumbnails are a real video frame with PIL text on top, so the
+    caller passes ai_generated=False and they carry no false provenance tag.
     """
     img = img.convert("RGB")
     scale = max(THUMB_W / img.width, THUMB_H / img.height)
@@ -578,7 +603,7 @@ def finalize_thumbnail(img, out_path):
     left = (img.width - THUMB_W) // 2
     top = (img.height - THUMB_H) // 2
     img = img.crop((left, top, left + THUMB_W, top + THUMB_H))
-    marks = _ai_save_kwargs(img)
+    marks = _ai_save_kwargs(img) if ai_generated else {}
     for q in (92, 88, 84, 78, 70, 60):
         try:
             img.save(out_path, "JPEG", quality=q, optimize=True, **marks)
@@ -653,13 +678,26 @@ Style: high contrast, saturated colours, crisp subject separation, cinematic lig
 
 def generate_thumbnail(api_key, title, session_id, face_image_path=None, bg_image_path=None,
                        extra_prompt="", count=3, video_context="", burn_text=True,
-                       thumbnail_text_hint="", language="en", frame_reference=None):
+                       thumbnail_text_hint="", language="en", frame_reference=None,
+                       video_path=None):
     """
     Generates `count` thumbnails, each from its own concept, in parallel.
     frame_reference: {"path", "face"} from extract_face_frames, used as the
     person reference when the user picked a frame instead of uploading a photo.
     Returns [{"url", "text", "why"}] (only the ones that rendered).
+
+    No key (free mode) => compose from real frames with PIL text instead of
+    calling a Gemini image model.
     """
+    if not api_key or free_backends.free_mode():
+        print("🆓 [Thumbnail] Free mode — composing thumbnails from video frames.")
+        return free_backends.generate_thumbnails_free(
+            title, session_id, count=count, video_path=video_path,
+            face_image_path=face_image_path, bg_image_path=bg_image_path,
+            frame_reference=frame_reference,
+            thumbnail_text_hint=thumbnail_text_hint, burn_text=burn_text,
+        )
+
     client = genai.Client(api_key=api_key)
     output_dir = os.path.join("output", "thumbnails", session_id)
     os.makedirs(output_dir, exist_ok=True)
@@ -731,6 +769,12 @@ def generate_youtube_description(api_key, title, transcript_segments, language, 
     Uses Gemini to generate a YouTube description with chapter markers from transcript segments.
     Returns: { "description": "full description text with chapters" }
     """
+    if not api_key:
+        import free_backends
+        print("🆓 [Thumbnail] No Gemini key — building the description from the transcript.")
+        return free_backends.free_youtube_description(
+            title, transcript_segments, language, video_duration)
+
     client = genai.Client(api_key=api_key)
 
     # Format segments for the prompt

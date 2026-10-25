@@ -20,6 +20,7 @@ import subprocess
 
 from ffmpeg_utils import video_encode_args, DELIVERY, mark_ai_generated
 import httpx
+import free_backends
 from urllib.parse import urljoin
 from typing import Optional, List, Dict, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -696,7 +697,15 @@ def generate_actor_images(
     description: str, fal_key: str, output_dir: str, title_slug: str, num_options: int = 3,
     product_description: str = None,
 ) -> List[str]:
-    """Generate multiple hyper-realistic actor portrait options using Flux 2 Pro."""
+    """Generate multiple hyper-realistic actor portrait options using Flux 2 Pro
+    (or local SDXL in free mode / when no fal.ai key is set)."""
+    if free_backends.use_free_images(fal_key):
+        print(f"[SaaSShorts] 🆓 Generating {num_options} actor image options (local SDXL)...")
+        return free_backends.generate_actor_images_free(
+            description, output_dir, title_slug, num_options=num_options,
+            product_description=product_description,
+        )
+
     print(f"[SaaSShorts] 🎨 Generating {num_options} actor image options (Flux 2 Pro)...")
 
     # Clean description: strip scene/actions, keep only physical appearance
@@ -750,18 +759,6 @@ def generate_actor_images(
 
     return sorted(paths)
 
-    paths = []
-    for i, img in enumerate(result.get("images", [])):
-        img_path = os.path.join(output_dir, f"{title_slug}_actor_option_{i}.png")
-        with httpx.Client(timeout=60.0) as client:
-            img_resp = client.get(img["url"])
-            with open(img_path, "wb") as f:
-                f.write(img_resp.content)
-        paths.append(img_path)
-        print(f"[SaaSShorts] ✅ Actor option {i+1}: {img_path}")
-
-    return paths
-
 
 def generate_actor_image(
     description: str, fal_key: str, output_path: str
@@ -781,8 +778,17 @@ def generate_voiceover(
     elevenlabs_key: str,
     output_path: str,
     voice_id: str = "21m00Tcm4TlvDq8ikWAM",
+    language: str = "en",
 ) -> str:
-    """Generate voiceover audio using ElevenLabs TTS."""
+    """Generate voiceover audio using ElevenLabs TTS, or edge-tts in free mode."""
+    if free_backends.use_free_tts(elevenlabs_key):
+        print(f"[SaaSShorts] 🆓 Generating voiceover with edge-tts ({len(text)} chars, {language})...")
+        free_backends.edge_tts_save(
+            text, output_path, voice=voice_id, language=language, log=print,
+        )
+        print(f"[SaaSShorts] ✅ Voiceover (free): {output_path}")
+        return output_path
+
     print(f"[SaaSShorts] 🎙️ Generating voiceover ({len(text)} chars)...")
 
     url = f"{ELEVENLABS_API_BASE}/text-to-speech/{voice_id}"
@@ -816,7 +822,10 @@ def generate_voiceover(
 
 
 def get_elevenlabs_voices(elevenlabs_key: str) -> list:
-    """Fetch available voices from ElevenLabs."""
+    """Fetch available voices from ElevenLabs, or the free edge-tts catalog."""
+    if free_backends.use_free_tts(elevenlabs_key):
+        return free_backends.list_free_voices()
+
     url = f"{ELEVENLABS_API_BASE}/voices"
     headers = {"xi-api-key": elevenlabs_key}
 
@@ -849,7 +858,11 @@ def generate_talking_head(
     fal_key: str,
     output_path: str,
 ) -> str:
-    """Generate talking head video using Kling Avatar v2 Standard on fal.ai."""
+    """Generate a talking head (Kling Avatar v2 on fal.ai, or Wav2Lip locally)."""
+    if free_backends.use_free_images(fal_key):
+        print("[SaaSShorts] 🆓 Generating talking head with local Wav2Lip...")
+        return free_backends.generate_talking_head_free(image_path, audio_path, output_path)
+
     print(f"[SaaSShorts] 🗣️ Generating talking head (Kling Avatar v2)...")
 
     # Upload image and audio to fal.ai CDN
@@ -892,8 +905,12 @@ def generate_talking_head_lowcost(
 ) -> str:
     """
     Low-cost talking head: Hailuo 2.3 Fast img2video → VEED Lipsync.
-    ~$0.39 vs ~$1.69 for Kling Avatar v2.
+    ~$0.39 vs ~$1.69 for Kling Avatar v2. Free mode uses Wav2Lip instead.
     """
+    if free_backends.use_free_images(fal_key):
+        print("[SaaSShorts] 🆓 Generating talking head with local Wav2Lip...")
+        return free_backends.generate_talking_head_free(image_path, audio_path, output_path)
+
     print(f"[SaaSShorts] 🗣️ Generating talking head (Low Cost: Hailuo + VEED Lipsync)...")
 
     # Step 1: Generate 6s video from image using MiniMax Hailuo 2.3 Fast ($0.19)
@@ -971,8 +988,13 @@ def generate_broll(
     prompt: str, fal_key: str, output_path: str, duration: str = "5"
 ) -> str:
     """
-    Generate b-roll: Recraft V4 image + Ken Burns zoom effect via FFmpeg.
+    Generate b-roll: generated image + Ken Burns zoom effect via FFmpeg.
+    Free mode uses a local SDXL still instead of Flux.
     """
+    if free_backends.use_free_images(fal_key):
+        print("[SaaSShorts] 🆓 Generating b-roll with local SDXL + Ken Burns...")
+        return free_backends.generate_broll_free(prompt, output_path, duration=duration)
+
     print(f"[SaaSShorts] 🎬 Generating b-roll image + Ken Burns effect...")
 
     dur_secs = int(duration)
@@ -1336,9 +1358,12 @@ def generate_full_video(
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    fal_key = config["fal_key"]
-    elevenlabs_key = config["elevenlabs_key"]
+    fal_key = config.get("fal_key") or ""
+    elevenlabs_key = config.get("elevenlabs_key") or ""
+    free_images = free_backends.use_free_images(fal_key)
+    free_voice = free_backends.use_free_tts(elevenlabs_key)
     voice_id = config.get("voice_id", "21m00Tcm4TlvDq8ikWAM")
+    script_language = config.get("language") or script.get("language") or "en"
     actor_desc = config.get("actor_description") or script.get("actor_description", "a young professional in their late 20s, wearing a casual modern outfit, clean background")
 
     title_slug = re.sub(r"[^a-z0-9]+", "_", script.get("title", "video").lower())[:30]
@@ -1381,7 +1406,8 @@ def generate_full_video(
         with ThreadPoolExecutor(max_workers=2) as executor:
             future_img = executor.submit(generate_actor_image, actor_desc, fal_key, actor_img) if need_img else None
             future_voice = executor.submit(
-                generate_voiceover, full_narration, elevenlabs_key, audio_path, voice_id
+                generate_voiceover, full_narration, elevenlabs_key, audio_path,
+                voice_id, script_language,
             ) if need_voice else None
 
             if future_img:
@@ -1395,6 +1421,10 @@ def generate_full_video(
         log("[2/6] ✅ Using cached assets.")
 
     # ── Step 3: Generate talking head ──
+    # SDXL and Wav2Lip both want the T4's 16 GB. Reloading SDXL for b-roll
+    # afterwards is cheaper than an OOM halfway through lip-sync.
+    if free_images:
+        free_backends.release_image_pipeline()
     video_mode = config.get("video_mode", "premium")
     if not _exists(talking_head):
         if video_mode == "lowcost":
@@ -1457,6 +1487,8 @@ def generate_full_video(
         log("[4/6] No b-roll segments in script, skipping.")
 
     # ── Step 5: Generate subtitles (from actual audio, not script text) ──
+    if free_images:
+        free_backends.release_image_pipeline()
     log("[5/6] Transcribing audio and generating TikTok-style subtitles...")
     generate_tiktok_subs(audio_path, srt_path, max_words=2)
 
@@ -1473,7 +1505,15 @@ def generate_full_video(
 
     # Cost estimate
     audio_duration = _get_media_duration(audio_path)
-    if video_mode == "lowcost":
+    if free_images or free_voice:
+        cost = {
+            "actor_image_flux": 0.00,
+            "voiceover_elevenlabs": 0.00,
+            "talking_head_kling": 0.00,
+            "broll_kling": 0.00,
+            "ffmpeg_compositing": 0.00,
+        }
+    elif video_mode == "lowcost":
         cost = {
             "actor_image_flux": 0.05,
             "voiceover_elevenlabs": round(len(full_narration) * 0.00003, 3),
@@ -1499,4 +1539,5 @@ def generate_full_video(
         "actor_image": actor_img,
         "duration": audio_duration,
         "cost_estimate": cost,
+        "free_mode": bool(free_images or free_voice),
     }

@@ -40,11 +40,17 @@ function saveCache(url, analysis, webResearch, scripts) {
   } catch { /* localStorage full */ }
 }
 
-export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uploadPostKey, uploadUserId, managed = false }) {
+export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uploadPostKey, uploadUserId, managed = false, freeMode = false, serverGemini = false }) {
   // Managed (hosted plan): Gemini (script) + Upload-Post run server-side via the
   // bearer token — no BYOK Gemini key needed. fal.ai + ElevenLabs stay BYOK.
+  // Free mode: actors/voice/images come from the server's local backends, so
+  // fal/ElevenLabs keys are optional and a Gemini key only improves the script.
   const geminiHeader = geminiApiKey ? { 'X-Gemini-Key': geminiApiKey } : {};
-  const needsGeminiKey = !geminiApiKey && !managed;
+  const needsGeminiKey = !geminiApiKey && !managed && !freeMode && !serverGemini;
+  // Paid providers are only required when neither free mode nor their key is in
+  // play; freeMode always wins on the server.
+  const needsFal = !freeMode && !falKey;
+  const needsElevenLabs = !freeMode && !elevenLabsKey;
   // Wizard state
   const [step, setStep] = useState(() => {
     const cache = loadCache();
@@ -120,13 +126,13 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
       .finally(() => setLoadingGallery(false));
   }, []);
 
-  // Fetch voices on mount
+  // Fetch voices on mount (free mode: edge-tts catalog, no key needed)
   useEffect(() => {
-    if (elevenLabsKey) {
+    if (elevenLabsKey || freeMode) {
       fetchVoices();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [elevenLabsKey]);
+  }, [elevenLabsKey, freeMode]);
 
   // Reset selected voice when actor gender changes
   useEffect(() => {
@@ -187,7 +193,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   const fetchVoices = async () => {
     try {
       const res = await fetch(getApiUrl('/api/saasshorts/voices'), {
-        headers: { 'X-ElevenLabs-Key': elevenLabsKey },
+        headers: elevenLabsKey ? { 'X-ElevenLabs-Key': elevenLabsKey } : {},
       });
       if (res.ok) {
         const data = await res.json();
@@ -264,12 +270,12 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   };
 
   const handleGenerate = async () => {
-    if (!falKey) {
-      alert('fal.ai API key required. Set it in Settings.');
+    if (needsFal) {
+      alert('fal.ai API key required. Set it in Settings, or enable FREE_MODE on the server.');
       return;
     }
-    if (!elevenLabsKey) {
-      alert('ElevenLabs API key required. Set it in Settings.');
+    if (needsElevenLabs) {
+      alert('ElevenLabs API key required. Set it in Settings, or enable FREE_MODE on the server.');
       return;
     }
 
@@ -292,8 +298,8 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Fal-Key': falKey,
-          'X-ElevenLabs-Key': elevenLabsKey,
+          ...(falKey ? { 'X-Fal-Key': falKey } : {}),
+          ...(elevenLabsKey ? { 'X-ElevenLabs-Key': elevenLabsKey } : {}),
         },
         body: JSON.stringify({
           script: scriptToSend,
@@ -339,8 +345,8 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Fal-Key': falKey,
-          'X-ElevenLabs-Key': elevenLabsKey,
+          ...(falKey ? { 'X-Fal-Key': falKey } : {}),
+          ...(elevenLabsKey ? { 'X-ElevenLabs-Key': elevenLabsKey } : {}),
         },
         body: JSON.stringify({
           script: scriptToSend,
@@ -411,6 +417,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
         </div>
         <p className="text-sm lowercase text-muted mb-6">
           Generate viral UGC videos for any product or business
+          {freeMode && <span className="text-ok"> &middot; free local mode (edge-tts + SDXL + Wav2Lip)</span>}
         </p>
 
         {/* Progress Steps */}
@@ -436,8 +443,8 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                       <span className={`text-sm font-medium lowercase ${videoMode === 'lowcost' ? 'text-ink' : 'text-ink2'}`}>Low Cost</span>
                       <span className="badge-ok">recommended</span>
                     </div>
-                    <p className="readout mb-1.5">~$0.80 / VIDEO</p>
-                    <p className="text-xs text-muted leading-relaxed">Hailuo 2.3 img2video + VEED Lipsync. Good movement + lip-sync.</p>
+                    <p className="readout mb-1.5">{freeMode ? 'free / video' : '~$0.80 / video'}</p>
+                    <p className="text-xs text-muted leading-relaxed">{freeMode ? 'Local SDXL actor image + Wav2Lip lip-sync. Slower, no API bill.' : 'Hailuo 2.3 img2video + VEED Lipsync. Good movement + lip-sync.'}</p>
                   </button>
                   <button
                     onClick={() => setVideoMode('premium')}
@@ -449,8 +456,8 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                       <span className={`text-sm font-medium lowercase ${videoMode === 'premium' ? 'text-ink' : 'text-ink2'}`}>Premium</span>
                       <span className="badge-brass">best quality</span>
                     </div>
-                    <p className="readout mb-1.5">~$2.00 / VIDEO</p>
-                    <p className="text-xs text-muted leading-relaxed">Kling Avatar v2 Standard. Full integrated movement.</p>
+                    <p className="readout mb-1.5">{freeMode ? 'free / video' : '~$2.00 / video'}</p>
+                    <p className="text-xs text-muted leading-relaxed">{freeMode ? 'Same local pipeline with more b-roll. No API bill.' : 'Kling Avatar v2 Standard. Full integrated movement.'}</p>
                   </button>
                 </div>
               </div>
@@ -1014,14 +1021,17 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
 
                 <button
                   onClick={async () => {
-                    if (!falKey || !actorDescription) return;
+                    if ((!falKey && !freeMode) || !actorDescription) return;
                     setGeneratingActors(true);
                     setActorOptions([]);
                     setSelectedActor(null);
                     try {
                       const res = await apiFetch('/api/saasshorts/actor-options', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'X-Fal-Key': falKey },
+                        headers: {
+                          'Content-Type': 'application/json',
+                          ...(falKey ? { 'X-Fal-Key': falKey } : {}),
+                        },
                         body: JSON.stringify({ actor_description: actorDescription, num_options: 3 }),
                       });
                       if (res.ok) {
@@ -1037,10 +1047,10 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                     } catch (e) { console.error(e); }
                     finally { setGeneratingActors(false); }
                   }}
-                  disabled={generatingActors || !falKey || !actorDescription}
+                  disabled={generatingActors || (!falKey && !freeMode) || !actorDescription}
                   className="btn-ghost mt-2 w-full py-2.5 text-sm"
                 >
-                  {generatingActors ? <><Loader2 size={14} className="animate-spin" /> Generating 3 actors...</> : <><User size={14} /> {actorOptions.length > 0 ? 'Regenerate actors' : 'Generate 3 new actors'} <span className="readout">~$0.06</span></>}
+                  {generatingActors ? <><Loader2 size={14} className="animate-spin" /> Generating 3 actors...</> : <><User size={14} /> {actorOptions.length > 0 ? 'Regenerate actors' : 'Generate 3 new actors'} <span className="readout">{freeMode ? 'free' : '~$0.06'}</span></>}
                 </button>
 
                 {/* Newly Generated Actor Options */}
@@ -1094,10 +1104,19 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
               <div className="card p-4">
                 <div className="flex items-center justify-between mb-3">
                   <span className="eyebrow">Estimated Cost</span>
-                  <span className="readout text-ink">~${videoMode === 'lowcost' ? '0.65' : '2.50'}</span>
+                  <span className={`readout ${freeMode ? 'text-ok' : 'text-ink'}`}>
+                    {freeMode ? 'free (local)' : `~$${videoMode === 'lowcost' ? '0.65' : '2.50'}`}
+                  </span>
                 </div>
                 <div className="space-y-1">
-                  {(videoMode === 'lowcost'
+                  {(freeMode
+                    ? [
+                        ['Voice (edge-tts)', 'free'],
+                        ['Actor image (SDXL)', 'free'],
+                        ['Talking head (Wav2Lip)', 'free'],
+                        ['B-roll (SDXL)', 'free'],
+                      ]
+                    : videoMode === 'lowcost'
                     ? [
                         ['Flux image', '$0.05'],
                         ['ElevenLabs voice', '$0.10'],
@@ -1118,14 +1137,20 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                     </div>
                   ))}
                 </div>
+                {freeMode && (
+                  <p className="text-xs text-muted mt-3 leading-relaxed">
+                    Runs on the Colab GPU. The first video downloads the SDXL and Wav2Lip models,
+                    so it takes longer; later videos reuse them.
+                  </p>
+                )}
               </div>
 
               {/* Missing keys warning */}
-              {(!falKey || !elevenLabsKey) && (
+              {(needsFal || needsElevenLabs) && (
                 <div className="p-3 bg-warn/10 rounded-input flex items-center gap-2 text-sm text-warn">
                   <AlertCircle size={14} />
-                  {!falKey && 'fal.ai API key missing. '}{!elevenLabsKey && 'ElevenLabs API key missing. '}
-                  Set them in Settings.
+                  {needsFal && 'fal.ai API key missing. '}{needsElevenLabs && 'ElevenLabs API key missing. '}
+                  Set them in Settings (or enable free mode).
                 </div>
               )}
 
@@ -1151,7 +1176,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
               </button>
               <button
                 onClick={handleGenerate}
-                disabled={!falKey || !elevenLabsKey || !selectedActor || generating}
+                disabled={needsFal || needsElevenLabs || !selectedActor || generating}
                 className="btn-primary px-6 py-2 text-sm"
               >
                 {generating ? (
@@ -1159,7 +1184,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                 ) : !selectedActor ? (
                   <><User size={14} /> Select an actor first</>
                 ) : (
-                  <><Film size={14} /> Generate video (~${videoMode === 'lowcost' ? '0.65' : '2.00'})</>
+                  <><Film size={14} /> Generate video ({freeMode ? 'free' : `~$${videoMode === 'lowcost' ? '0.65' : '2.00'}`})</>
                 )}
               </button>
             </div>
@@ -1309,12 +1334,12 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                         {Object.entries(genResult.cost_estimate).filter(([k]) => k !== 'total').map(([k, v]) => (
                           <div key={k} className="flex justify-between readout">
                             <span>{k.replace(/_/g, ' ')}</span>
-                            <span>${v}</span>
+                            <span>{genResult.free_mode ? 'free' : `$${v}`}</span>
                           </div>
                         ))}
                         <div className="flex justify-between readout text-ink border-t border-rule pt-1.5 mt-1.5">
                           <span>Total</span>
-                          <span>${genResult.cost_estimate.total}</span>
+                          <span>{genResult.free_mode ? 'free (local GPU)' : `$${genResult.cost_estimate.total}`}</span>
                         </div>
                       </div>
                     </div>
@@ -1380,7 +1405,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                     <h3 className="eyebrow">Publish to Social Media</h3>
 
                     {!uploadPostKey ? (
-                      <p className="text-xs lowercase text-muted">Set your Upload-Post API key in Settings to enable publishing.</p>
+                      <p className="text-xs lowercase text-muted">Set your Upload-Post API key in Settings to enable publishing{freeMode ? ', or just download the video above.' : '.'}</p>
                     ) : (
                       <>
                         {/* Platform toggles */}

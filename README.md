@@ -29,6 +29,8 @@ Two people on camera? OpenShorts stacks them instead of shrinking the wide shot,
 
 Self-hosting is genuinely free and always will be. It costs you a machine, your own API keys and the time to keep it running. The hosted plans exist to cover that hardware and those keys, not to unlock features.
 
+> **No GPU or no paid API keys? Run it on Google Colab.** The [`colab/`](colab/) folder contains a free-mode setup that replaces fal.ai, ElevenLabs, Gemini images and S3 with local SDXL, Wav2Lip, edge-tts, PIL thumbnails and local storage. Open [`colab/OpenShorts_Free_Colab.ipynb`](colab/OpenShorts_Free_Colab.ipynb) and follow the Indonesian guide in [`colab/README.md`](colab/README.md). A free Gemini API key is optional for AI Shorts and YouTube Studio; Clip Generator needs one (or a local LLM via `LLM_BASE_URL`) to pick moments.
+
 https://github.com/user-attachments/assets/b45fa983-16b4-48b5-ac5b-a267836b9ad9
 
 
@@ -191,11 +193,19 @@ Self-hosting OpenShorts is free. You provide the machine and you only pay for th
 
 ## Requirements
 
+### Hosted / paid-provider mode
+
 - **Docker & Docker Compose**
 - **Google Gemini API Key** ([Free — get it here](https://aistudio.google.com/app/apikey)) — required for all AI features
 - **fal.ai API Key** ([Pay-per-use](https://fal.ai)) — required for AI Shorts (actor generation, video, lip-sync)
 - **ElevenLabs API Key** ([Free tier](https://elevenlabs.io)) — required for voiceover/dubbing
 - **Upload-Post API Key** ([free tier](https://upload-post.com)) — required for direct social posting
+
+### Free mode (Colab or local GPU/CPU)
+
+- **No paid API keys.** Set `FREE_MODE=1` (the Colab notebook does this automatically).
+- Only an optional **free Gemini key** for smarter clip selection, scripts, titles and dubbing translation; without it, the app falls back to local templates/Google Translate.
+- See [`colab/README.md`](colab/README.md) for the exact install steps. Local SDXL, Wav2Lip and edge-tts replace fal.ai/ElevenLabs; files are stored in `output/` instead of S3.
 
 ---
 

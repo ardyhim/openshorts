@@ -1,0 +1,53 @@
+# OpenShorts free-mode dependencies for Google Colab (Python 3.12, T4 GPU).
+#
+# IMPORTANT
+#   * torch / torchvision are deliberately NOT listed here. Colab already ships
+#     a CUDA-enabled pair; reinstalling the pins from requirements.txt would
+#     either download a CPU build or spend 10+ minutes replacing a working one.
+#   * mediapipe is installed separately with --no-deps by the notebook:
+#         pip install --no-deps "mediapipe==0.10.21"
+#     It needs NumPy 1.x, and the legacy mp.solutions API the app uses was
+#     removed from newer releases. The notebook therefore pins numpy<2 below.
+#   * Installing NumPy 1.26 also means OpenCV must stay below 4.12 (4.12+
+#     requires NumPy 2). OpenCV 4.10/4.11 are the last 1.x-compatible wheels.
+
+# --- Base application (requirements.txt minus torch/torchvision/mediapipe) ---
+scenedetect==0.7
+transnetv2-pytorch==1.0.5
+ultralytics==8.4.46
+tqdm==4.67.3
+yt-dlp[default]
+faster-whisper==1.2.1
+py3langid==0.3.0
+google-genai==1.75.0
+python-dotenv==1.2.2
+boto3==1.43.4
+fastapi==0.136.1
+uvicorn[standard]==0.46.0
+python-multipart==0.0.27
+httpx==0.28.1
+Pillow==12.2.0
+beautifulsoup4==4.14.3
+
+# --- Free replacements for fal.ai / ElevenLabs / Gemini images ---
+edge-tts==7.3.0
+deep-translator==1.11.4
+
+# --- Local SDXL image generation (RealVisXL V4.0) ---
+diffusers==0.36.0
+transformers==4.57.1
+accelerate==1.11.0
+safetensors==0.6.2
+
+# --- Wav2Lip needs librosa/scipy (soundfile and numba come with librosa) ---
+librosa==0.11.0
+
+# --- NumPy/OpenCV/protobuf versions compatible with mediapipe 0.10.21 ---
+numpy>=1.26.0,<2.0
+opencv-python==4.10.0.84
+protobuf>=4.25.3,<5
+absl-py
+attrs
+flatbuffers
+sounddevice
+sentencepiece

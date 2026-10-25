@@ -55,7 +55,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [showDescModal, setShowDescModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
-    const { plan } = useAuth();
+    const { plan, freeMode, serverGemini } = useAuth();
     const videoRef = React.useRef(null);
     // Pristine base clip (no burned subtitles/hook), stable regardless of how
     // clip.video_url mutates after server edits. Used as the compositing base
@@ -298,9 +298,12 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             const apiKey = geminiApiKey || localStorage.getItem('gemini_key');
 
             // Managed (paid) users get the Gemini key resolved server-side;
-            // only BYOK/self-host needs a local key.
-            if (!apiKey && !isManaged) {
-                throw new Error("Gemini API Key is missing. Please set it in Settings.");
+            // only BYOK/self-host needs a local key. AI editing genuinely needs
+            // Gemini — free mode without any key uses the local tools instead.
+            if (!apiKey && !isManaged && !serverGemini) {
+                throw new Error(freeMode
+                    ? "AI editing needs a Gemini API key. Add a free key in Settings, or use subtitles/hooks/reframe (no key needed)."
+                    : "Gemini API Key is missing. Please set it in Settings.");
             }
             const geminiHeaders = apiKey ? { 'X-Gemini-Key': apiKey } : {};
 
@@ -605,9 +608,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
         setEditError(null);
         try {
             const apiKey = elevenLabsKey;
-            console.log('[Translate] API Key available:', !!apiKey);
+            console.log('[Translate] API Key available:', !!apiKey, 'freeMode:', freeMode);
 
-            if (!apiKey) {
+            // Free mode dubs locally (faster-whisper + edge-tts); no key needed.
+            if (!apiKey && !isManaged && !freeMode) {
                 throw new Error("ElevenLabs API Key is missing. Please set it in Settings.");
             }
 
@@ -624,7 +628,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-ElevenLabs-Key': apiKey
+                    ...(apiKey ? { 'X-ElevenLabs-Key': apiKey } : {})
                 },
                 body: JSON.stringify(requestBody)
             });
@@ -1198,7 +1202,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 onTranslate={handleTranslate}
                 isProcessing={isTranslating}
                 videoUrl={currentVideoUrl}
-                hasApiKey={!!elevenLabsKey}
+                hasApiKey={!!elevenLabsKey || freeMode || isManaged}
+                freeMode={freeMode}
             />
 
             {showWatermarkModal && (

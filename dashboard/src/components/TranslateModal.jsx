@@ -36,7 +36,7 @@ const LANGUAGES = {
     "en": "English",
 };
 
-export default function TranslateModal({ isOpen, onClose, onTranslate, isProcessing, videoUrl, hasApiKey }) {
+export default function TranslateModal({ isOpen, onClose, onTranslate, isProcessing, videoUrl, hasApiKey, freeMode = false }) {
     const [targetLanguage, setTargetLanguage] = useState('es');
 
     if (!isOpen) return null;
@@ -86,10 +86,12 @@ export default function TranslateModal({ isOpen, onClose, onTranslate, isProcess
                 <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center shrink-0">
                     <Languages size={18} className="text-brass" />
                 </div>
-                <p className="text-xs text-muted">AI voice translation by ElevenLabs</p>
+                <p className="text-xs text-muted">
+                    {freeMode ? 'Free local dubbing: faster-whisper + edge-tts' : 'AI voice translation by ElevenLabs'}
+                </p>
             </div>
 
-            {!hasApiKey && (
+            {!hasApiKey && !freeMode && (
                 <div className="mb-4 flex items-start gap-2">
                     <span className="badge-warn shrink-0"><AlertCircle size={12} /> key missing</span>
                     <p className="text-sm text-muted">Configure ElevenLabs API Key in Settings first.</p>
@@ -127,7 +129,9 @@ export default function TranslateModal({ isOpen, onClose, onTranslate, isProcess
 
             {/* Info */}
             <p className="text-xs text-muted leading-relaxed mb-2">
-                The audio will be dubbed with AI-generated voice in the selected language, matching the original speaker's characteristics.
+                {freeMode
+                    ? 'The speech is transcribed locally, translated for free, then re-voiced with an edge-tts neural voice and mixed back over the original music. No API key or payment is used.'
+                    : "The audio will be dubbed with AI-generated voice in the selected language, matching the original speaker's characteristics."}
             </p>
 
             {/* AI Act art. 50: we mark the file, the person publishing it is the

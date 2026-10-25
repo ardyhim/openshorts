@@ -155,6 +155,11 @@ export function AuthProvider({ children }) {
 
   const value = {
     billingEnabled: config.billingEnabled,
+    // Free/local mode: the backend replaces fal.ai, ElevenLabs, Gemini image
+    // generation and S3 with local/free equivalents, so most keys are optional.
+    freeMode: !!config.freeMode,
+    serverGemini: !!config.serverGemini,
+    serverUploadPost: !!config.serverUploadPost,
     localLlm: config.localLlm || null,
     googleAuthEnabled: config.googleAuthEnabled,
     jobRetentionSeconds: config.jobRetentionSeconds || null,

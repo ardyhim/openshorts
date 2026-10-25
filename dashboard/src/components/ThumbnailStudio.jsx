@@ -70,11 +70,12 @@ function DragDropZone({ label, accept, onFile, file, onClear, icon }) {
   );
 }
 
-export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId, managed = false, onCreateClips = null }) {
+export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUserId, managed = false, onCreateClips = null, freeMode = false, serverGemini = false }) {
   // Managed (hosted plan): Gemini runs server-side via the bearer token, no BYOK key.
   // Only send X-Gemini-Key for self-host BYOK. apiFetch attaches the bearer token.
+  // Free mode: local frame-composed thumbnails + heuristic titles/description.
   const keyHeader = geminiApiKey ? { 'X-Gemini-Key': geminiApiKey } : {};
-  const needsKey = !geminiApiKey && !managed;
+  const needsKey = !geminiApiKey && !managed && !freeMode && !serverGemini;
   // Step management
   const [step, setStep] = useState(0);
   const [mode, setMode] = useState(null); // 'video' or 'manual'
@@ -500,6 +501,17 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
               <p className="text-sm font-medium text-warn lowercase">Gemini API Key Required</p>
               <p className="text-xs text-muted mt-1">YouTube Studio requires a Google Gemini API key to function. Please configure it in the <strong>Settings</strong> tab before using this feature. Gemini's free tier includes 1,500 requests per day.</p>
             </div>
+          </div>
+        )}
+
+        {freeMode && !needsKey && (
+          <div className="mb-6 p-4 bg-paper2 border border-rule rounded-card flex items-start gap-3">
+            <Sparkles size={16} className="text-ok shrink-0 mt-0.5" />
+            <p className="text-xs text-muted leading-relaxed">
+              <span className="text-ink font-medium">Free mode:</span> titles and descriptions use local heuristics,
+              and thumbnails are composed from a real video frame with burned text. Add a free Gemini key in
+              Settings for smarter titles — everything still works without one.
+            </p>
           </div>
         )}
 
@@ -1144,14 +1156,18 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                     <span className="text-sm font-medium lowercase">Upload-Post Not Configured</span>
                   </div>
                   <p className="text-xs text-muted">
-                    To publish directly to YouTube, configure your Upload-Post API key and connect a profile in Settings.
+                    {freeMode
+                      ? 'Publishing needs an Upload-Post key (free tier, no card). You can still download the finished thumbnail above and upload it manually.'
+                      : 'To publish directly to YouTube, configure your Upload-Post API key and connect a profile in Settings.'}
                   </p>
-                  <button
-                    onClick={() => { }}
-                    className="text-xs lowercase text-brass hover:underline flex items-center gap-1"
-                  >
-                    <Settings size={12} /> Go to Settings
-                  </button>
+                  {!freeMode && (
+                    <button
+                      onClick={() => { }}
+                      className="text-xs lowercase text-brass hover:underline flex items-center gap-1"
+                    >
+                      <Settings size={12} /> Go to Settings
+                    </button>
+                  )}
                 </div>
               ) : (
                 <button

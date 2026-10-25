@@ -269,7 +269,7 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm } = useAuth();
+  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, freeMode, serverGemini } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   // Free plan: "want the watermark off?" once per job, when the clips land.
@@ -875,8 +875,11 @@ function App() {
   // `keysMissing` now means "self-host BYOK keys missing" — it never fires on hosted.
   // A self-hosted server running the moment picker on a local LLM
   // (LLM_BASE_URL) does not need a Gemini key for the core pipeline.
-  const geminiOk = !!apiKey || !!localLlm;
-  const keysMissing = !billingEnabled && (!geminiOk || !uploadPostKey);
+  // Free mode replaces Gemini image gen/fal/ElevenLabs with local backends and
+  // has template fallbacks for analysis, so no key is required at all; a Gemini
+  // key (browser or server) only improves titles/scripts.
+  const geminiOk = !!apiKey || !!localLlm || !!freeMode || !!serverGemini;
+  const keysMissing = !billingEnabled && !freeMode && (!geminiOk || !uploadPostKey);
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: Clip Generator tutorial (AuthContext set os_show_clip_tutorial
@@ -1637,7 +1640,33 @@ function App() {
                 </div>
               ) : (
                 <>
-              <KeyInput onKeySet={setApiKey} savedKey={apiKey} />
+              {freeMode && (
+                <div className="card p-4 sm:p-6 mb-8 border-brass/40">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-input bg-paper3 flex items-center justify-center shrink-0">
+                        <Sparkles size={16} className="text-ok" />
+                      </div>
+                      <h2 className="text-base font-medium text-ink lowercase">Free mode is on</h2>
+                    </div>
+                    <span className="badge-ok">100% free</span>
+                  </div>
+                  <p className="text-xs text-muted mb-4 leading-relaxed">
+                    The server replaces the paid services with local/free ones:
+                    <strong> edge-tts</strong> voices, <strong>SDXL</strong> images,
+                    <strong> Wav2Lip</strong> talking heads, <strong>faster-whisper</strong> + free translation
+                    for dubbing, and local storage instead of S3. No API key is required.
+                    A free Gemini key (below) only improves titles, scripts and translations.
+                  </p>
+                  <ul className="text-xs text-ink2 space-y-1.5">
+                    <li className="flex items-start gap-2"><Check size={13} className="text-ok shrink-0 mt-0.5" /> Clip Generator, YouTube Studio and AI Shorts work without keys.</li>
+                    <li className="flex items-start gap-2"><Check size={13} className="text-ok shrink-0 mt-0.5" /> Video dubbing uses free translation + edge-tts.</li>
+                    <li className="flex items-start gap-2"><AlertTriangle size={13} className="text-warn shrink-0 mt-0.5" /> Publishing still needs an Upload-Post key (free tier, no card) — or just download the video.</li>
+                    <li className="flex items-start gap-2"><AlertTriangle size={13} className="text-warn shrink-0 mt-0.5" /> First AI Shorts run downloads the SDXL + Wav2Lip models, so it is slow.</li>
+                  </ul>
+                </div>
+              )}
+              <KeyInput onKeySet={setApiKey} savedKey={apiKey} optional={freeMode} />
 
               <div className="card p-4 sm:p-6 mt-8">
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
@@ -1647,11 +1676,12 @@ function App() {
                     </div>
                     <h2 className="text-base font-medium text-ink lowercase">Social Integration</h2>
                   </div>
-                  <span className="badge-warn">Required</span>
+                  <span className={freeMode ? 'badge-ok' : 'badge-warn'}>{freeMode ? 'Optional' : 'Required'}</span>
                 </div>
                 <p className="text-xs text-muted mb-6 leading-relaxed">
-                  Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts via <strong>Upload-Post</strong>.
-                  Includes a <strong>free tier</strong> (no credit card required).
+                  {freeMode
+                    ? 'Optional: connect Upload-Post to publish directly to TikTok, Instagram Reels and YouTube Shorts. Without it you can still download every clip. Includes a free tier (no credit card required).'
+                    : <>Required to publish your clips to TikTok, Instagram Reels, and YouTube Shorts via <strong>Upload-Post</strong>. Includes a <strong>free tier</strong> (no credit card required).</>}
                 </p>
                 <div className="space-y-4">
                   <label className="block text-sm text-muted">Upload-Post API Key</label>
@@ -1705,8 +1735,10 @@ function App() {
                   <span className="readout">BYOK</span>
                 </div>
                 <p className="text-xs text-muted mb-6 leading-relaxed">
-                  For <strong>AI Shorts &amp; dubbing</strong> — bring your own key. Translate your clips to different
-                  languages using <strong>ElevenLabs</strong> AI dubbing (billed by ElevenLabs). Not covered by your plan.
+                  {freeMode
+                    ? 'Not needed in free mode: dubbing runs locally with faster-whisper + free translation + edge-tts voices. Add an ElevenLabs key only if you prefer their paid voices.'
+                    : <>For <strong>AI Shorts &amp; dubbing</strong> — bring your own key. Translate your clips to different
+                  languages using <strong>ElevenLabs</strong> AI dubbing (billed by ElevenLabs). Not covered by your plan.</>}
                 </p>
                 <div className="space-y-4">
                   <label className="block text-sm text-muted">ElevenLabs API Key</label>
@@ -1762,9 +1794,11 @@ function App() {
                   <span className="readout">BYOK</span>
                 </div>
                 <p className="text-xs text-muted mb-6 leading-relaxed">
-                  Generate UGC-style videos with AI actors for any product or business using <strong>fal.ai</strong>.
+                  {freeMode
+                    ? 'Not needed in free mode: AI actors, b-roll and talking heads are generated locally (SDXL + Wav2Lip) and voices come from edge-tts. Add a fal.ai key only if you want the paid cloud models.'
+                    : <>Generate UGC-style videos with AI actors for any product or business using <strong>fal.ai</strong>.
                   <strong> Not covered by your plan</strong> — bring your own fal.ai + ElevenLabs keys (billed by those
-                  providers, ~$0.65-2 per video). Your plan still covers the AI script &amp; orchestration.
+                  providers, ~$0.65-2 per video). Your plan still covers the AI script &amp; orchestration.</>}
                 </p>
                 <div className="space-y-4">
                   <label className="block text-sm text-muted">fal.ai API Key</label>
@@ -1813,7 +1847,7 @@ function App() {
 
           {/* View: SaaS Shorts */}
           {activeTab === 'saasshorts' && (
-            <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} managed={isManaged} />
+            <SaaShortsTab geminiApiKey={apiKey} elevenLabsKey={elevenLabsKey} falKey={falKey} uploadPostKey={uploadPostKey} uploadUserId={uploadUserId} managed={isManaged} freeMode={freeMode} serverGemini={serverGemini} />
           )}
 
           {/* View: AI Agent */}
@@ -1981,6 +2015,8 @@ function App() {
               uploadPostKey={uploadPostKey}
               uploadUserId={uploadUserId}
               managed={isManaged}
+              freeMode={freeMode}
+              serverGemini={serverGemini}
               onCreateClips={(sessionId) => {
                 setActiveTab('dashboard');
                 // The Studio source is the user's own upload, published to their
@@ -2311,6 +2347,8 @@ function App() {
                           geminiApiKey={apiKey}
                           elevenLabsKey={elevenLabsKey}
                           isManaged={isManaged}
+                          freeMode={freeMode}
+                          serverGemini={serverGemini}
                           connectedPlatforms={(userProfiles.find((p) => p.username === uploadUserId) || userProfiles[0])?.connected ?? null}
                           onConnectSocials={isManaged ? handleConnectSocials : null}
                           onPlay={(time) => handleClipPlay(time)}

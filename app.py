@@ -124,6 +124,10 @@ for _stream in (sys.stdout, sys.stderr):
 # when BILLING_ENABLED is set. With the flag off, the app behaves exactly as the
 # self-hosted BYOK app does today (no extra dependencies required).
 BILLING_ENABLED = os.environ.get("BILLING_ENABLED", "").lower() in ("1", "true", "yes")
+# Free/local mode: run without fal.ai, ElevenLabs, Gemini image generation or
+# S3. The replacements live in free_backends.py; the flag is surfaced through
+# /api/config so the dashboard stops asking for keys it does not need.
+FREE_MODE = os.environ.get("FREE_MODE", "").lower() in ("1", "true", "yes")
 
 # Job/file retention (issue #46). Self-host defaults to 24h: the 1h sweep kept
 # deleting finished projects under users who never touched their env, and the
@@ -2805,6 +2809,15 @@ async def get_config():
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
+        # Free/local pipeline. serverGemini means the backend holds a key, so
+        # the browser does not need to send one; serverUploadPost does the same
+        # for publishing (optional in free mode).
+        "freeMode": FREE_MODE,
+        "serverGemini": bool(os.environ.get("GEMINI_API_KEY")),
+        "serverUploadPost": bool(os.environ.get("UPLOAD_POST_API_KEY")),
+        "freeTts": bool(FREE_MODE),
+        "freeImages": bool(FREE_MODE),
+        "freeDubbing": bool(FREE_MODE),
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
@@ -3214,8 +3227,10 @@ async def process_endpoint(
         env.pop("PROXY_URL", None)
     if api_key:
         env["GEMINI_API_KEY"] = api_key # Override with key from request
-    else:
+    elif not FREE_MODE:
         env.pop("GEMINI_API_KEY", None)  # local-LLM job: main.py must not find a stale key
+    # In FREE_MODE the server-side key is deliberate: AI Shorts and the thumbnail
+    # Studio rely on it, and leaving it out would silently disable clip analysis.
     # The stdio fix above only covers this process. main.py prints an emoji on
     # its first line and configures nothing, so on a cp1252 console the child
     # still dies before it renders anything -- the server starts and every job
@@ -5465,8 +5480,9 @@ async def translate_clip(
     request: Request,
     x_elevenlabs_key: Optional[str] = Header(None, alias="X-ElevenLabs-Key")
 ):
-    """Translate a video clip to a different language using ElevenLabs dubbing."""
-    if not x_elevenlabs_key:
+    """Translate a video clip to a different language using ElevenLabs dubbing
+    (free mode: faster-whisper + Gemini/Google translate + edge-tts)."""
+    if not x_elevenlabs_key and not FREE_MODE:
         raise HTTPException(status_code=400, detail="Missing X-ElevenLabs-Key header")
 
     await _ensure_job_files(req.job_id, request)
@@ -5509,8 +5525,21 @@ async def translate_clip(
     output_path = os.path.join(output_dir, output_filename)
 
     try:
-        # Run translation in thread pool (blocking API calls)
+        # Run translation in thread pool (blocking API calls). FREE_MODE wins:
+        # even a leftover ElevenLabs key must not start a paid dub.
+        use_free_dub = FREE_MODE or not x_elevenlabs_key
+        gemini_key = await resolve_gemini(request) if use_free_dub else None
+
         def run_translate():
+            if use_free_dub:
+                import free_backends
+                return free_backends.dub_video_free(
+                    video_path=input_path,
+                    output_path=output_path,
+                    target_language=req.target_language,
+                    gemini_key=gemini_key,
+                    source_language=req.source_language,
+                )
             return translate_video(
                 video_path=input_path,
                 output_path=output_path,
@@ -6092,7 +6121,7 @@ async def thumbnail_analyze(
 ):
     """Analyze a video and suggest viral YouTube titles."""
     api_key = await resolve_gemini(request)
-    if not api_key:
+    if not api_key and not FREE_MODE:
         raise gemini_missing_error()
 
     pre_transcript = None
@@ -6194,7 +6223,7 @@ async def thumbnail_titles(
 ):
     """Refine title suggestions or accept a manual title."""
     api_key = await resolve_gemini(request)
-    if not api_key:
+    if not api_key and not FREE_MODE:
         raise gemini_missing_error()
 
     # Manual title mode - just create a session with the user's title
@@ -6273,10 +6302,8 @@ async def thumbnail_generate(
     not. frame: url of a frame from /api/thumbnail/frames to use as the
     person reference when no face photo is uploaded."""
     api_key = await resolve_gemini(request)
-    if not api_key:
+    if not api_key and not FREE_MODE:
         raise gemini_missing_error()
-
-    # Image generation is the one expensive managed Gemini call — paid plans only.
     if BILLING_ENABLED:
         user = await _user_from_request(request)
         if user is not None and user.plan == "free":
@@ -6322,10 +6349,12 @@ async def thumbnail_generate(
         # Session context: transcript summary, the thumbnail text the critic
         # paired with this title, the language, and the chosen video frame.
         video_context, text_hint, language, frame_reference = "", "", "en", None
+        video_path = None
         session = thumbnail_sessions.get(session_id)
         if session:
             video_context = session.get("context", "")
             language = session.get("language", "en")
+            video_path = session.get("video_path")
             titles = session.get("titles", [])
             texts = session.get("thumbnail_texts", [])
             if title in titles and titles.index(title) < len(texts):
@@ -6340,11 +6369,14 @@ async def thumbnail_generate(
                 generate_thumbnail, api_key, title, session_id, face_path, bg_path,
                 extra_prompt, count, video_context, burn_text=burn_text,
                 thumbnail_text_hint=text_hint, language=language,
-                frame_reference=frame_reference),
+                frame_reference=frame_reference, video_path=video_path),
         )
 
         if not thumbnails:
-            raise HTTPException(status_code=500, detail="Thumbnail generation failed. Please check your Gemini API key has access to image generation (gemini-3.1-flash-image-preview model).")
+            detail = ("Free thumbnail generation failed. Check the server logs."
+                      if FREE_MODE else
+                      "Thumbnail generation failed. Please check your Gemini API key has access to image generation (gemini-3.1-flash-image-preview model).")
+            raise HTTPException(status_code=500, detail=detail)
 
         # Success — charge the reserved minutes.
         if reservation_id:
@@ -6406,7 +6438,7 @@ async def thumbnail_describe(
 ):
     """Generate a YouTube description with chapters from the transcript."""
     api_key = await resolve_gemini(request)
-    if not api_key:
+    if not api_key and not FREE_MODE:
         raise gemini_missing_error()
 
     if req.session_id not in thumbnail_sessions:
@@ -6609,7 +6641,7 @@ async def saasshorts_analyze(
 ):
     """Analyze a URL or manual description and generate video scripts."""
     gemini_key = await resolve_gemini(request)
-    if not gemini_key:
+    if not gemini_key and not FREE_MODE:
         raise gemini_missing_error()
 
     if not req.url and not req.description:
@@ -6623,26 +6655,47 @@ async def saasshorts_analyze(
         loop = asyncio.get_event_loop()
 
         def run_analysis():
+            import free_backends
             web_research = None
 
             if req.url and req.url.strip():
                 # URL provided: full scrape + research pipeline
-                scraped = scrape_website(req.url)
-                web_research = research_saas_online(req.url, gemini_key)
-                analysis = analyze_saas(scraped, gemini_key, web_research=web_research)
+                try:
+                    scraped = scrape_website(req.url)
+                except Exception as scrape_err:
+                    if gemini_key or not req.description:
+                        raise
+                    print(f"[SaaSShorts] ⚠️ Scrape failed ({scrape_err}); using the description instead.")
+                    scraped = {}
+                if gemini_key:
+                    web_research = research_saas_online(req.url, gemini_key)
+                    analysis = analyze_saas(scraped, gemini_key, web_research=web_research)
+                else:
+                    # No key: still use the real page content, no fabricated web research.
+                    print("[SaaSShorts] 🆓 No Gemini key — using the local analysis.")
+                    analysis = free_backends.free_analysis(
+                        scraped=scraped, description=req.description, url=req.url)
             else:
                 # Manual description: build analysis from description
-                analysis = {
-                    "product_name": req.description.split(",")[0].strip()[:60] if req.description else "Product",
-                    "description": req.description,
-                    "value_proposition": req.description,
-                    "target_audience": "general audience",
-                    "key_features": [req.description],
-                    "pain_points": [],
-                    "tone": "casual and authentic",
-                }
+                if gemini_key:
+                    analysis = {
+                        "product_name": req.description.split(",")[0].strip()[:60] if req.description else "Product",
+                        "description": req.description,
+                        "value_proposition": req.description,
+                        "target_audience": "general audience",
+                        "key_features": [req.description],
+                        "pain_points": [],
+                        "tone": "casual and authentic",
+                    }
+                else:
+                    analysis = free_backends.free_analysis(description=req.description)
 
-            scripts = generate_scripts(analysis, gemini_key, req.num_scripts, req.style, req.language, req.actor_gender)
+            if gemini_key:
+                scripts = generate_scripts(analysis, gemini_key, req.num_scripts, req.style, req.language, req.actor_gender)
+            else:
+                print("[SaaSShorts] 🆓 No Gemini key — using the local script templates.")
+                scripts = free_backends.free_scripts(
+                    analysis, req.num_scripts, req.style, req.language, req.actor_gender)
             return {
                 "analysis": analysis,
                 "scripts": scripts,
@@ -6712,8 +6765,9 @@ async def saasshorts_actor_options(
 ):
     """Generate multiple actor image options for the user to choose from."""
     await require_managed_entitlement(request)
-    fal_key = x_fal_key
-    if not fal_key:
+    fal_key = x_fal_key or ""
+    # Free mode / no key: generate local SDXL portraits instead of refusing.
+    if not fal_key and not FREE_MODE:
         raise HTTPException(status_code=400, detail="Missing fal.ai API Key")
 
     try:
@@ -7117,12 +7171,12 @@ async def saasshorts_generate(
 ):
     """Generate a SaaS UGC video from a script. Returns a job_id for polling."""
     await require_managed_entitlement(request)
-    fal_key = x_fal_key
-    elevenlabs_key = x_elevenlabs_key
+    fal_key = x_fal_key or ""
+    elevenlabs_key = x_elevenlabs_key or ""
 
-    if not fal_key:
+    if not fal_key and not FREE_MODE:
         raise HTTPException(status_code=400, detail="Missing fal.ai API Key (X-Fal-Key header)")
-    if not elevenlabs_key:
+    if not elevenlabs_key and not FREE_MODE:
         raise HTTPException(status_code=400, detail="Missing ElevenLabs API Key (X-ElevenLabs-Key header)")
 
     # Support retry: reuse output_dir so cached assets (image, voice, head, broll) are kept
@@ -7205,6 +7259,8 @@ async def saasshorts_generate(
         "actor_description": req.actor_description,
         "selected_actor_path": selected_actor_path,
         "video_mode": req.video_mode,
+        # The free voice/script need the language; paid paths ignore it.
+        "language": req.script.get("language") or "en",
     }
 
     async def run_generation():
@@ -7296,9 +7352,14 @@ async def saasshorts_status(job_id: str, request: Request):
 
 @app.get("/api/saasshorts/voices")
 async def saasshorts_voices(
+    language: Optional[str] = None,
     x_elevenlabs_key: Optional[str] = Header(None, alias="X-ElevenLabs-Key"),
 ):
-    """List available ElevenLabs voices."""
+    """List available ElevenLabs voices (free mode: edge-tts neural voices)."""
+    if FREE_MODE or not x_elevenlabs_key:
+        import free_backends
+        return {"voices": free_backends.list_free_voices(language), "source": "edge-tts"}
+
     if x_elevenlabs_key:
         try:
             loop = asyncio.get_event_loop()
@@ -7318,3 +7379,21 @@ async def saasshorts_voices(
         ],
         "source": "defaults",
     }
+
+
+# ---- Optional: serve the built dashboard from FastAPI ------------------------
+# Colab has no docker-compose/nginx, and exposing two ports through a tunnel is
+# awkward, so with SERVE_DASHBOARD=1 this process also serves dashboard/dist.
+# vite.config.js builds with a relative API base in production, so the dashboard
+# talks to the same origin and no CORS/proxy is involved. Mounted last: "/" is a
+# catch-all and must not shadow the API routes above.
+if os.environ.get("SERVE_DASHBOARD", "").lower() in ("1", "true", "yes"):
+    _dashboard_dist = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "dashboard", "dist")
+    if os.path.isdir(_dashboard_dist):
+        app.mount("/", StaticFiles(directory=_dashboard_dist, html=True),
+                  name="dashboard")
+        print(f"🖥️  Serving dashboard from {_dashboard_dist}")
+    else:
+        print(f"⚠️  SERVE_DASHBOARD is set but {_dashboard_dist} does not exist; "
+              "build it with: cd dashboard && npm ci && npm run build")
