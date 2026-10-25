@@ -212,6 +212,39 @@ def test_run_whisper_transcription_materializes_segments(fake_faster_whisper, mo
     assert info.language == "es"
 
 
+def test_whisper_retries_cpu_on_missing_cublas(monkeypatch):
+    calls = []
+
+    def fake_run(path, **params):
+        calls.append(tb._whisper_force_cpu)
+        if len(calls) == 1:
+            raise RuntimeError(
+                "Library libcublas.so.12 is not found or cannot be loaded")
+        return ["seg"], SimpleNamespace(language="en")
+
+    monkeypatch.setattr(tb, "_run_whisper_once", fake_run)
+    monkeypatch.setattr(tb, "_whisper_model", object())
+    monkeypatch.setattr(tb, "_whisper_force_cpu", False)
+
+    segments, info = tb.run_whisper_transcription("video.mp4")
+
+    assert segments == ["seg"]
+    assert info.language == "en"
+    assert tb._whisper_force_cpu is True
+    assert calls == [False, True]
+
+
+def test_whisper_does_not_retry_on_unrelated_runtime_error(monkeypatch):
+    def fake_run(path, **params):
+        raise RuntimeError("decoder exploded")
+
+    monkeypatch.setattr(tb, "_run_whisper_once", fake_run)
+    monkeypatch.setattr(tb, "_whisper_force_cpu", False)
+
+    with pytest.raises(RuntimeError, match="decoder exploded"):
+        tb.run_whisper_transcription("video.mp4")
+
+
 # --- release_models: the API process must not keep the models resident ------
 
 class _FakeCT2:

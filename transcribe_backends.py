@@ -202,6 +202,29 @@ def _run_whisper_once(media_path, **params):
         return materialized, info
 
 
+def _looks_like_cuda_failure(exc):
+    """True for CUDA/CTranslate2 failures that should retry on CPU.
+
+    CT2 reports missing runtime libraries as e.g. "Library libcublas.so.12 is
+    not found or cannot be loaded"; the message does not contain the word
+    "cuda", so matching on "cuda" alone killed Colab jobs instead of falling
+    back to CPU.
+    """
+    msg = str(exc).lower()
+    return any(
+        marker in msg
+        for marker in (
+            "cuda",
+            "cublas",
+            "cudnn",
+            "cudart",
+            "libcuda",
+            "no kernel image is available",
+            "device-side assert",
+        )
+    )
+
+
 def run_whisper_transcription(media_path, **params):
     """Transcribe and FULLY materialize the segments inside the GPU gate.
 
@@ -209,15 +232,15 @@ def run_whisper_transcription(media_path, **params):
     iterating, so the gate must wrap list(segments), not just transcribe().
     Returns (segments_list, info).
 
-    A CUDA failure (model load OOM or mid-decode) retries once on CPU and
-    pins CPU for the rest of the process — the GPU is shared with other
-    models, so a job must degrade instead of dying when VRAM runs out.
+    A CUDA failure (model load OOM, missing cuBLAS/cuDNN, or mid-decode)
+    retries once on CPU and pins CPU for the rest of the process — the GPU is
+    shared with other models, so a job must degrade instead of dying.
     """
     global _whisper_model, _whisper_force_cpu
     try:
         return _run_whisper_once(media_path, **params)
     except RuntimeError as e:
-        if _whisper_force_cpu or "cuda" not in str(e).lower():
+        if _whisper_force_cpu or not _looks_like_cuda_failure(e):
             raise
         print(f"⚠️ [ASR] whisper GPU failed ({e}) — retrying on CPU", flush=True)
         _whisper_force_cpu = True

@@ -408,6 +408,30 @@ else:
         "(belum ada wheel dengan mp.solutions); memakai OpenCV Haar."
     )
 
+# CTranslate2 (dipakai faster-whisper) memanggil dlopen("libcublas.so.12").
+# Colab bisa memakai torch CUDA 13, dan library pip tidak otomatis ada di
+# loader path. Pasang runtime CUDA 12 kalau belum ada; cell 10 menambahkan
+# folder lib-nya ke LD_LIBRARY_PATH. Tanpa ini Whisper jatuh ke CPU.
+if sys.platform.startswith("linux"):
+    import ctypes, glob, site
+
+    def _cublas12_available():
+        try:
+            ctypes.CDLL("libcublas.so.12")
+            return True
+        except OSError:
+            pass
+        for sp in site.getsitepackages():
+            if glob.glob(os.path.join(sp, "nvidia", "cublas", "lib", "libcublas.so.12*")):
+                return True
+        return bool(glob.glob("/usr/local/cuda*/lib64/libcublas.so.12*"))
+
+    if _cublas12_available():
+        print("libcublas   : tersedia")
+    else:
+        print("libcublas   : belum ada; memasang nvidia-cublas-cu12...")
+        pip("install", "-q", "--no-warn-script-location", "nvidia-cublas-cu12")
+
 print("\nSelesai. torch/torchvision tidak diubah:")
 try:
     import torch
@@ -768,10 +792,25 @@ subprocess.run(
 
 code(r'''
 #@title 10. Jalankan server OpenShorts
-import json, os, signal, subprocess, sys, time, urllib.request
+import glob, json, os, signal, site, subprocess, sys, time, urllib.request
 from pathlib import Path
 
 PROJECT_DIR = os.path.abspath(PROJECT_DIR)
+
+# CTranslate2 mencari libcublas.so.12 lewat loader, bukan lewat sys.path.
+# Tambahkan folder lib pip NVIDIA ke LD_LIBRARY_PATH; env ini diwariskan ke
+# server di bawah dan ke subprocess job (main.py).
+cuda_lib_dirs = []
+for sp in site.getsitepackages():
+    cuda_lib_dirs += glob.glob(os.path.join(sp, "nvidia", "*", "lib"))
+cuda_lib_dirs += glob.glob("/usr/local/cuda*/lib64")
+cuda_lib_dirs = [d for d in cuda_lib_dirs if os.path.isdir(d)]
+if cuda_lib_dirs:
+    old_ld = os.environ.get("LD_LIBRARY_PATH", "")
+    os.environ["LD_LIBRARY_PATH"] = ":".join(
+        cuda_lib_dirs + ([old_ld] if old_ld else []))
+    print("CUDA libs:", ", ".join(cuda_lib_dirs))
+
 pid_path = Path(PROJECT_DIR) / ".server.pid"
 log_path = Path(PROJECT_DIR) / "server.log"
 
@@ -1060,6 +1099,7 @@ md(r"""
 | `GPU tidak terdeteksi` | `Runtime` → `Change runtime type` → `T4 GPU`, lalu jalankan ulang dari cell 1. |
 | `numpy` bukan 1.x / `mediapipe` gagal import | Jalankan ulang cell 5. MediaPipe 0.10.21 hanya dipasang di Python <= 3.12; di Python 3.13 app otomatis memakai OpenCV Haar dan tidak butuh MediaPipe. Jangan install `mediapipe` versi terbaru: `mp.solutions` sudah dihapus. |
 | `open() got an unexpected keyword argument 'metadata_errors'` | `av` 19 menghapus argumen yang masih dipakai `faster-whisper 1.2.1`. Jalankan `pip install "av==18.1.0"`, lalu restart server: cell 13 (stop) → cell 10 (start). |
+| `RuntimeError: Library libcublas.so.12 is not found` | Cell 5 memasang `nvidia-cublas-cu12` bila belum ada, dan cell 10 menambahkan folder lib-nya ke `LD_LIBRARY_PATH`. Jalankan ulang cell 5 lalu cell 10. Kalau GPU tetap tidak bisa, Whisper otomatis retry di CPU dan job tetap selesai (lebih lambat). |
 | `CUDA out of memory` | Hentikan server (cell 13), restart runtime, turunkan `IMAGE_STEPS` ke 12–16, dan jangan jalankan dua video bersamaan. |
 | Model SDXL terasa lambat / tidak muncul | Unduh dulu lewat cell 8 (`PRELOAD_SDXL=True`). Generation pertama memakan 5–15 menit. |
 | `Wav2Lip` gagal | Normal: pipeline otomatis memakai still image + audio. Cek log; kualitas lipsync butuh checkpoint ~520 MB. |
