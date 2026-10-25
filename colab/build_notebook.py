@@ -479,7 +479,7 @@ if GEMINI_API_KEY:
             candidates = [requested] + [c for c in candidates if c != requested]
 
         def _smoke(model):
-            nonlocal auth_invalid
+            global auth_invalid
             try:
                 response = client.models.generate_content(
                     model=model,
@@ -1109,6 +1109,20 @@ notebook = {
 }
 
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "OpenShorts_Free_Colab.ipynb")
+
+# Compile every plain-Python cell before writing. ast.parse() alone misses
+# symbol-table errors such as `nonlocal x` at module scope.
+for idx, cell in enumerate(CELLS):
+    if cell["cell_type"] != "code":
+        continue
+    source = "".join(cell["source"])
+    if source.lstrip().startswith(("!", "%")):
+        continue
+    try:
+        compile(source, f"cell-{idx}", "exec")
+    except SyntaxError as exc:
+        raise SystemExit(f"Notebook cell {idx} has a syntax error: {exc}")
+
 with open(out, "w", encoding="utf-8", newline="\n") as fh:
     json.dump(notebook, fh, ensure_ascii=False, indent=1)
 print("wrote", out)
