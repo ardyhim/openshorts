@@ -1655,11 +1655,12 @@ function App() {
                     The server replaces the paid services with local/free ones:
                     <strong> edge-tts</strong> voices, <strong>SDXL</strong> images,
                     <strong> Wav2Lip</strong> talking heads, <strong>faster-whisper</strong> + free translation
-                    for dubbing, and local storage instead of S3. No API key is required.
-                    A free Gemini key (below) only improves titles, scripts and translations.
+                    for dubbing, and local storage instead of S3. No paid API key is required.
+                    A free Gemini key (below) improves titles/scripts and is required for Clip Generator.
                   </p>
                   <ul className="text-xs text-ink2 space-y-1.5">
-                    <li className="flex items-start gap-2"><Check size={13} className="text-ok shrink-0 mt-0.5" /> Clip Generator, YouTube Studio and AI Shorts work without keys.</li>
+                    <li className="flex items-start gap-2"><Check size={13} className="text-ok shrink-0 mt-0.5" /> YouTube Studio, AI Shorts and dubbing work without keys.</li>
+                    <li className="flex items-start gap-2"><AlertTriangle size={13} className="text-warn shrink-0 mt-0.5" /> Clip Generator needs a free Gemini key (or a local LLM via LLM_BASE_URL) to pick viral moments.</li>
                     <li className="flex items-start gap-2"><Check size={13} className="text-ok shrink-0 mt-0.5" /> Video dubbing uses free translation + edge-tts.</li>
                     <li className="flex items-start gap-2"><AlertTriangle size={13} className="text-warn shrink-0 mt-0.5" /> Publishing still needs an Upload-Post key (free tier, no card) — or just download the video.</li>
                     <li className="flex items-start gap-2"><AlertTriangle size={13} className="text-warn shrink-0 mt-0.5" /> First AI Shorts run downloads the SDXL + Wav2Lip models, so it is slow.</li>
