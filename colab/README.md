@@ -198,6 +198,7 @@ Default notebook memakai repo <https://github.com/ardyhim/openshorts.git> dan **
 | `GPU tidak terdeteksi` | Runtime belum T4. `Runtime` → `Change runtime type` → `T4 GPU`, lalu ulang dari cell 1. |
 | `mediapipe` / `numpy` error | MediaPipe hanya dipasang di Python <= 3.12. Di Colab Python 3.13, app otomatis memakai OpenCV Haar (`face_detection_compat.py`), jadi `mediapipe` tidak diperlukan. Jangan `pip install mediapipe` versi terbaru: `mp.solutions` sudah dihapus. |
 | `pip install` gagal / `ResolutionImpossible` | Jalankan ulang cell 4 dengan `UPDATE_PROJECT=True` lalu cell 5. `requirements-colab.txt` memakai `py3langid==0.2.2` dan marker NumPy/OpenCV per versi Python. Versi 0.3.0 memaksa NumPy 2 dan bentrok dengan Python <= 3.12. |
+| `TypeError: open() got an unexpected keyword argument 'metadata_errors'` | `av` 19 menghapus argumen yang masih dipakai `faster-whisper 1.2.1`. Jalankan `pip install "av==18.1.0"`, lalu restart server: cell 13 (stop) → cell 10 (start). |
 | `CUDA out of memory` | Restart runtime, turunkan `IMAGE_STEPS` ke 12–16, jalankan satu video sekaligus. |
 | SDXL lambat / download macet | Jalankan cell 8 `PRELOAD_SDXL=True`; cek koneksi dan sisa disk. |
 | Wav2Lip gagal | Pipeline otomatis memakai still image + audio. Cek `server.log`. |

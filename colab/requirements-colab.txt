@@ -22,6 +22,9 @@ ultralytics==8.4.46
 tqdm==4.67.3
 yt-dlp[default]
 faster-whisper==1.2.1
+# faster-whisper 1.2.1 calls av.open(..., metadata_errors="ignore"), which
+# av 19 removed. 18.1.0 still supports it and ships cp311-abi3 wheels.
+av==18.1.0
 # py3langid 0.3.0 forces NumPy >= 2, which breaks the Python <= 3.12
 # mediapipe path (NumPy 1.x). 0.2.2 exposes the same classify() API and works
 # with both NumPy 1.x and 2.x.
