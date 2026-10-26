@@ -29,6 +29,7 @@ import gemini_worker
 import hook_grounding
 import layout_picker
 import llm_backend
+import manual_clip_selection
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
@@ -1980,6 +1981,70 @@ def score_batch_size():
     return 3 if llm_backend.active() else 8
 
 
+def finalize_selected_clips(shorts, words, video_duration, min_secs, max_secs):
+    """Snap clip boundaries to words, then drop overlapping duplicates.
+
+    Shared by the Gemini detail pass and the external-AI import path so both
+    produce identical cuts from the same timestamps.
+    """
+    for s in shorts:
+        # Keep the model's raw proposal: it is how boundary accuracy is
+        # measured (distance to the nearest word before the snap; p90 was
+        # 0.4-0.5 s on 8 talks, 21-sep-2026, so the snap reaches it).
+        s["proposed"] = [s.get("start", 0), s.get("end", 0)]
+        ns, ne = snap_clip_to_words(s.get("start", 0), s.get("end", 0), words,
+                                    video_duration, min_duration=min_secs,
+                                    max_duration=max_secs)
+        s["start"], s["end"] = ns, ne
+    deduped = dedupe_overlapping(shorts)
+    if len(deduped) < len(shorts):
+        print(f"   Dropped {len(shorts) - len(deduped)} clip(s) overlapping a "
+              f"better-scored one.")
+    return deduped
+
+
+def _transcript_words(transcript_result):
+    words = []
+    for segment in transcript_result.get('segments', []):
+        for word in segment.get('words', []):
+            words.append({'w': word['word'], 's': word['start'], 'e': word['end']})
+    return words
+
+
+def get_manual_clips(transcript_result, video_duration, selection_path):
+    """Build clips from an external AI's structured answer.
+
+    No model call happens here: the JSON was validated by app.py on import,
+    and this path re-validates it so CLI users get the same guarantees. Cuts
+    still go through the normal word-snap + overlap-dedupe pipeline.
+    """
+    print(f"\U0001f4c4 Using external AI clip selection: "
+          f"{os.path.basename(selection_path)}")
+    try:
+        with open(selection_path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+    except Exception as e:
+        raise RuntimeError(f"Could not read the imported clip selection: {e}") from e
+    min_secs, max_secs = clip_duration_bounds()
+    try:
+        parsed = manual_clip_selection.parse_selection_payload(
+            payload, duration=video_duration, min_secs=min_secs,
+            max_secs=max_secs, transcript=transcript_result)
+    except manual_clip_selection.SelectionError as e:
+        raise RuntimeError(f"Invalid imported clip selection: {e}") from e
+
+    for warning in parsed.get("warnings") or []:
+        print(f"   \u26a0\ufe0f {warning}")
+    shorts = parsed["clips"]
+    if not shorts:
+        raise RuntimeError("The imported clip selection contains no clips.")
+    print(f"   Imported {len(shorts)} clip(s) from the external AI.")
+
+    shorts = finalize_selected_clips(shorts, _transcript_words(transcript_result),
+                                     video_duration, min_secs, max_secs)
+    return {"shorts": shorts, "selection_source": "external-ai"}
+
+
 def get_viral_clips(transcript_result, video_duration):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
@@ -2006,10 +2071,7 @@ def get_viral_clips(transcript_result, video_duration):
     print(f"\U0001f916  Model: {model_name} | language: {language}")
 
     # Full word list — ground truth for snapping cut points.
-    words = []
-    for segment in transcript_result['segments']:
-        for word in segment.get('words', []):
-            words.append({'w': word['word'], 's': word['start'], 'e': word['end']})
+    words = _transcript_words(transcript_result)
 
     try:
         # Scoring windows must be able to CONTAIN a max-length clip (the detail
@@ -2107,19 +2169,8 @@ def get_viral_clips(transcript_result, video_duration):
             print(f"   Kept the {max_clips} best-scoring clip(s) of "
                   f"{max_clips + dropped}.")
         # Snap each proposed clip onto real word boundaries (+ a bit of silence).
-        for s in shorts:
-            # Keep the model's raw proposal: it is how boundary accuracy is
-            # measured (distance to the nearest word before the snap; p90 was
-            # 0.4-0.5 s on 8 talks, 21-sep-2026, so the snap reaches it).
-            s["proposed"] = [s.get("start", 0), s.get("end", 0)]
-            ns, ne = snap_clip_to_words(s.get("start", 0), s.get("end", 0), words, video_duration,
-                                        min_duration=min_secs, max_duration=max_secs)
-            s["start"], s["end"] = ns, ne
-        deduped = dedupe_overlapping(shorts)
-        if len(deduped) < len(shorts):
-            print(f"   Dropped {len(shorts) - len(deduped)} clip(s) overlapping a "
-                  f"better-scored one.")
-            shorts = deduped
+        shorts = finalize_selected_clips(shorts, words, video_duration,
+                                         min_secs, max_secs)
 
         # Aggregate cost across both passes.
         cost_analysis = None
@@ -2272,8 +2323,24 @@ if __name__ == '__main__':
                         help="Output aspect: vertical/auto (9:16), horizontal (keep 16:9), square (1:1).")
     parser.add_argument('--transcript', type=str,
                         help="Path to a precomputed transcript JSON (transcribe_media shape); skips transcription.")
+    parser.add_argument('--prepare-manual', action='store_true',
+                        help="Transcribe, save the transcript checkpoint and stop. The dashboard then exports it for an external AI.")
+    parser.add_argument('--clips-file', type=str,
+                        help="Path to an imported clip-selection JSON; skips Gemini and renders those clips.")
 
     args = parser.parse_args()
+    if args.prepare_manual and args.clips_file:
+        parser.error("--prepare-manual and --clips-file cannot be used together.")
+    if args.skip_analysis and (args.prepare_manual or args.clips_file):
+        parser.error("--skip-analysis cannot be combined with manual clip selection.")
+    if args.prepare_manual or args.clips_file:
+        # Neither manual route may spend Gemini quota: --prepare-manual stops
+        # before any model stage, and --clips-file already carries the picks.
+        # Drop the key too, so the frame-based stages (burned-in subtitle
+        # detection) degrade instead of quietly making a call -- including when
+        # a restart resumes the job with the server's env key.
+        os.environ.pop("GEMINI_API_KEY", None)
+        os.environ["HOOK_GROUNDING"] = "0"
     output_format = args.format
 
     script_start_time = time.time()
@@ -2351,6 +2418,7 @@ if __name__ == '__main__':
                              daemon=True).start()
 
         use_early = (not args.skip_analysis and not args.transcript
+                     and not args.prepare_manual and not args.clips_file
                      and os.environ.get("EARLY_AUDIO", "1").strip() != "0"
                      and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
                      and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT)))
@@ -2399,7 +2467,7 @@ if __name__ == '__main__':
     # instead of one per clip, and the answer is a property of the material
     # ("this is a screencast"), which does not change between its own clips.
     # It runs before any render so the modules are switched on in time.
-    if layout_picker.ENABLED:
+    if layout_picker.ENABLED and not (args.prepare_manual or args.clips_file):
         try:
             _cap = cv2.VideoCapture(input_video)
             _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -2422,7 +2490,7 @@ if __name__ == '__main__':
     # our captions are the only text layer (burned_subtitles.py). Only when we
     # caption at all, and never on a vertical source, which is passed through.
     source_subtitle_band = None
-    if (not args.skip_analysis
+    if (not args.skip_analysis and not args.prepare_manual
             and os.environ.get("AUTO_CAPTIONS", "1").strip() != "0"):
         try:
             import burned_subtitles
@@ -2464,7 +2532,7 @@ if __name__ == '__main__':
         # with the file falls back to transcribing normally rather than failing.
         if args.transcript:
             try:
-                with open(args.transcript, 'r') as f:
+                with open(args.transcript, 'r', encoding='utf-8') as f:
                     transcript = json.load(f)
                 if not transcript.get('segments'):
                     raise ValueError("transcript has no segments")
@@ -2499,15 +2567,38 @@ if __name__ == '__main__':
 
         # Music-only or wordless footage transcribes to a handful of words.
         # Clip it by what is on screen instead, like a video with no audio.
-        if transcript is not None and speech_is_sparse(transcript, duration):
+        # Manual analysis is the exception: its whole contract is the timed
+        # transcript, so a sparse one is still exported/imported instead of
+        # being thrown away for the (Gemini) visual path.
+        if (transcript is not None
+                and not (args.prepare_manual or args.clips_file)
+                and speech_is_sparse(transcript, duration)):
             n_words = sum(len((sg.get("text") or "").split()) for sg in transcript["segments"])
             print(f"🔇 Only {n_words} word(s) of speech in {duration:.0f}s — "
                   f"switching to visual analysis.")
             transcript = None
 
+        # Manual analysis: stop after the transcript exists. The dashboard
+        # exports it, the user's AI picks clips, and a second run imports them.
+        if args.prepare_manual:
+            if transcript is None:
+                raise RuntimeError(
+                    "Manual transcript analysis needs speech, and this video has "
+                    "no usable transcript. Use normal clip generation instead.")
+            save_transcript_checkpoint(output_dir, transcript, input_video, duration)
+            print(f"📄 Transcript ready for manual AI analysis: "
+                  f"{len(transcript['segments'])} segments, {duration:.1f}s.")
+            sys.exit(0)
+
         # 4. Gemini Analysis (transcript-driven, or vision for silent videos)
         early_clips = (early_state or {}).get("clips") if early_state else None
-        if (transcript is not None and early_clips
+        if args.clips_file:
+            if transcript is None:
+                raise RuntimeError(
+                    "The imported clip selection needs a transcript, but this "
+                    "video has none.")
+            clips_data = get_manual_clips(transcript, duration, args.clips_file)
+        elif (transcript is not None and early_clips
                 and transcript is early_state["transcript"]):
             print("♻️ Using the clips Gemini picked while the video downloaded.")
             clips_data = early_clips
@@ -2521,7 +2612,9 @@ if __name__ == '__main__':
             # wrote no metadata.json, so app.py marked the job failed anyway
             # (app.py:1087) after burning GPU on a render nobody could see.
             raise RuntimeError(
-                "Clip detection failed — the AI model did not return usable clips for this video.")
+                "Clip detection failed — the AI model did not return usable clips "
+                "for this video. You can export the transcript from the dashboard "
+                "and import clip picks from another AI instead.")
         else:
             print(f"🔥 Found {len(clips_data['shorts'])} clips!")
 

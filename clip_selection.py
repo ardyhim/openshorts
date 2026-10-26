@@ -164,19 +164,24 @@ def trim_to_best(shorts, max_clips):
     return [item for _, item in sorted(best, key=lambda pair: pair[0])]
 
 
-def clip_duration_bounds():
+def clip_duration_bounds(environ=None):
     """The clip length band (seconds) the selection prompts and word-snapping
     enforce. ``CLIP_MIN_SECONDS`` / ``CLIP_MAX_SECONDS`` override the classic
     15-60 — set per job by /api/process when the user asks for a specific
     length, or by hand for A/B runs. Values are clamped to platform-sane
     limits and re-ordered so bad input degrades instead of breaking the job.
+
+    ``environ`` lets the server compute the band for one job from the env it
+    will hand its subprocess instead of its own process environment.
     """
     import os
 
+    source = os.environ if environ is None else environ
+
     def _read(name, default):
         try:
-            return float(os.environ.get(name, ""))
-        except ValueError:
+            return float(source.get(name, ""))
+        except (TypeError, ValueError):
             return default
 
     lo = _read("CLIP_MIN_SECONDS", 15.0)

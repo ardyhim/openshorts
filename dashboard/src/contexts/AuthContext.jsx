@@ -160,6 +160,9 @@ export function AuthProvider({ children }) {
     freeMode: !!config.freeMode,
     serverGemini: !!config.serverGemini,
     serverUploadPost: !!config.serverUploadPost,
+    // Self-host/free mode: pause after transcription, export the transcript,
+    // import clip picks from any external AI. Off in cloud mode.
+    manualAnalysis: !!config.manualAnalysis,
     localLlm: config.localLlm || null,
     googleAuthEnabled: config.googleAuthEnabled,
     jobRetentionSeconds: config.jobRetentionSeconds || null,

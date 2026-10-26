@@ -29,7 +29,7 @@ const readVideoDuration = (file) => new Promise((resolve) => {
     } catch { resolve(null); }
 });
 
-export default function MediaInput({ onProcess, isProcessing }) {
+export default function MediaInput({ onProcess, isProcessing, manualAnalysisEnabled = false }) {
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
     // File upload is the primary path; the link is secondary.
     const [mode, setMode] = useState('file'); // 'file' | 'url'
@@ -60,6 +60,11 @@ export default function MediaInput({ onProcess, isProcessing }) {
     // depend on the detector, and 'none' keeps the plain single crop.
     const [layout, setLayout] = useState(() => {
         try { return localStorage.getItem('os_layout') || 'auto'; } catch { return 'auto'; }
+    });
+    // Manual AI selection: transcribe, stop, export the transcript for any AI,
+    // then import its structured answer. No Gemini calls for the moment pick.
+    const [manualAnalysis, setManualAnalysis] = useState(() => {
+        try { return localStorage.getItem('os_manual_analysis') === '1'; } catch { return false; }
     });
     const infoRef = useRef(null);
 
@@ -124,11 +129,13 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHook,
             autoHookStyle,
             layout,
+            manualAnalysis: manualAnalysisEnabled ? manualAnalysis : false,
         };
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style_v2', autoHookStyle);
             localStorage.setItem('os_layout', layout);
+            localStorage.setItem('os_manual_analysis', manualAnalysis ? '1' : '0');
         } catch { /* ignore */ }
         if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
@@ -299,7 +306,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     >
                         <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
                         advanced options
-                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook) && (
+                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook || (manualAnalysisEnabled && manualAnalysis)) && (
                             <span className="text-brass">·</span>
                         )}
                     </button>
@@ -387,6 +394,26 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     </p>
                                 )}
                             </div>
+                            {manualAnalysisEnabled && (
+                                <div className="col-span-1 sm:col-span-3 pt-3 sm:pt-1 border-t border-rule">
+                                    <label className="flex items-start gap-2 text-xs text-ink2 cursor-pointer select-none">
+                                        <input
+                                            type="checkbox"
+                                            checked={manualAnalysis}
+                                            onChange={(e) => setManualAnalysis(e.target.checked)}
+                                            className="mt-0.5 w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
+                                        />
+                                        <span>
+                                            manual AI selection (no Gemini)
+                                            <span className="block text-[11px] leading-relaxed text-muted">
+                                                Transcribe, download the JSON, pick hooks with any AI
+                                                (ChatGPT, Claude, Gemini web, local model), then import
+                                                its answer. Rendering still works as usual.
+                                            </span>
+                                        </span>
+                                    </label>
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>

@@ -41,7 +41,18 @@ Notebook ini menjalankan **OpenShorts versi free mode** di Google Colab (disaran
 
 1. Runtime Colab dengan GPU: `Runtime` → `Change runtime type` → `T4 GPU`.
 2. **Tidak perlu upload file.** Cell 4 otomatis menjalankan `git clone` dari <https://github.com/ardyhim/openshorts.git> ke `/content/openshorts`. Jalankan ulang cell 4 kapan pun untuk mengambil update terbaru; `.env`, `output/`, dan cache tetap aman. Opsi Upload ZIP / Google Drive hanya cadangan offline.
-3. **Opsional tetapi sangat disarankan:** API key Gemini gratis dari [Google AI Studio](https://aistudio.google.com/apikey). Tanpa key, AI Shorts dan YouTube Studio tetap jalan dengan fallback lokal, tetapi **Clip Generator butuh Gemini** (atau server LLM lokal via `LLM_BASE_URL`) untuk memilih momen viral.
+3. **Opsional tetapi sangat disarankan:** API key Gemini gratis dari [Google AI Studio](https://aistudio.google.com/apikey). Tanpa key, AI Shorts dan YouTube Studio tetap jalan dengan fallback lokal. **Clip Generator** bisa memakai Gemini (atau server LLM lokal via `LLM_BASE_URL`), atau **manual AI selection** tanpa Gemini sama sekali: transkrip diekspor, kamu minta AI apa pun memilih timestamp, lalu import JSON-nya. Lihat bagian **Manual AI selection** di bawah.
+
+**Manual AI selection (tanpa Gemini):**
+
+1. Buka **advanced options** di dashboard dan centang **manual AI selection (no Gemini)**.
+2. Proses video seperti biasa. Whisper membuat transkrip, lalu job berhenti di status **MANUAL AI** (belum render, tanpa panggilan Gemini).
+3. Klik **download transcript** di panel kanan. File JSON berisi transkrip bertimestamp, kandidat window, durasi target, dan prompt siap pakai.
+4. Berikan file itu ke ChatGPT/Claude/Gemini web/Ollama/LM Studio. Minta jawaban berupa JSON `{"clips":[{"start":..., "end":..., "title":..., "hook":...}]}`.
+5. Klik **import ai result**, pilih jawaban AI. App memvalidasi, merapikan cut ke batas kata, membuang overlap, lalu merender.
+6. Kalau job otomatis gagal karena kuota tetapi transkrip sudah ada, panel manual tetap muncul di status error.
+
+> `start`/`end` memakai detik absolut. Markdown fence diperbolehkan. Import juga menerima bentuk metadata internal (`shorts`, `video_title_for_youtube_short`, `predicted_score`, dst.).
 
 > **Python 3.13:** MediaPipe 0.10.21 tidak punya wheel untuk Python 3.13, jadi cell 5 otomatis melewatinya dan app memakai **OpenCV Haar** (`face_detection_compat.py`) untuk face tracking. Di Python <= 3.12, MediaPipe tetap dipakai. Tidak ada langkah manual.
 
@@ -129,7 +140,7 @@ IMAGE_STEPS = max(8, min(50, int(IMAGE_STEPS)))
 
 if ASK_GEMINI_KEY and not GEMINI_API_KEY:
     GEMINI_API_KEY = getpass.getpass(
-        "Gemini API key (Enter = lewati; Clip Generator nanti butuh key/LLM lokal): "
+        "Gemini API key (Enter = lewati; Clip Generator bisa manual tanpa Gemini): "
     ).strip()
 
 PROJECT_DIR = os.path.abspath(os.path.expanduser(PROJECT_DIR.strip()))
@@ -562,7 +573,8 @@ else:
     print("Gemini key kosong.")
     print("  - AI Shorts, YouTube Studio, thumbnail, dubbing, dan Clip Generator tanpa AI")
     print("    tetap bisa dijalankan dengan fallback lokal.")
-    print("  - Clip Generator (pemilihan momen viral) membutuhkan Gemini atau LLM lokal.")
+    print("  - Clip Generator (pemilihan momen viral) bisa memakai Gemini, LLM lokal,")
+    print("    atau manual AI selection: transkrip → AI eksternal → import JSON.")
     print("  - Tambahkan key lalu jalankan ulang cell ini untuk memilih model yang tersedia.")
 
 os.environ.update({
@@ -905,7 +917,7 @@ if not ready:
 print("Server siap.\n")
 with urllib.request.urlopen("http://127.0.0.1:8000/api/config", timeout=10) as resp:
     cfg = json.load(resp)
-for key in ("billingEnabled", "freeMode", "freeTts", "freeImages", "freeDubbing", "serverGemini"):
+for key in ("billingEnabled", "freeMode", "freeTts", "freeImages", "freeDubbing", "serverGemini", "manualAnalysis"):
     print(f"  {key:15}: {cfg.get(key)}")
 if not cfg.get("freeMode"):
     raise RuntimeError("freeMode tidak aktif. Periksa .env / cell 6.")
@@ -1104,7 +1116,9 @@ md(r"""
 | Model SDXL terasa lambat / tidak muncul | Unduh dulu lewat cell 8 (`PRELOAD_SDXL=True`). Generation pertama memakan 5–15 menit. |
 | `Wav2Lip` gagal | Normal: pipeline otomatis memakai still image + audio. Cek log; kualitas lipsync butuh checkpoint ~520 MB. |
 | Gemini `404 model not found` | Jalankan ulang cell 6 dengan key terisi; cell itu memilih model flash yang benar-benar tersedia untuk key Anda. |
-| Gemini `429` / `quota exceeded` | Kuota gratis habis. Tunggu beberapa menit/hari, atau ganti key. |
+| Gemini `429` / `quota exceeded` | Kuota gratis habis. Tunggu beberapa menit/hari, ganti key, atau centang **manual AI selection** di advanced options lalu ikuti langkah di bagian atas notebook (tanpa Gemini). |
+| Panel **MANUAL AI** tidak muncul | Pastikan server memakai `FREE_MODE=1`/`BILLING_ENABLED=0` dan job dijalankan dengan opsi manual. Video tanpa suara tidak punya transkrip untuk diekspor. |
+| Import JSON ditolak | `start` harus lebih kecil dari `end`, memakai detik absolut, dan tidak melewati durasi video. Markdown fence diperbolehkan; baca pesan validasi di panel. |
 | `yt-dlp` gagal download YouTube | Colab memakai IP datacenter yang sering diblokir YouTube. Download video di komputer lalu upload file ke dashboard. |
 | Dashboard 403 di Colab proxy | Buka ulang link, pastikan masih login akun Google yang sama, atau pakai Cloudflared. |
 | `npm ci` gagal | Pastikan Node.js >= 18 (`node -v`). Cell 3 akan memasang Node 22 bila perlu. |
@@ -1113,7 +1127,7 @@ md(r"""
 
 **Catatan kualitas**
 
-- **Clip Generator** membutuhkan Gemini (gratis) atau server LLM lokal (`LLM_BASE_URL`, misalnya Ollama). Tanpa itu, pipeline tidak bisa memilih momen viral.
+- **Clip Generator** bisa memakai Gemini (gratis) atau server LLM lokal (`LLM_BASE_URL`, misalnya Ollama). Tanpa keduanya, aktifkan **manual AI selection**: transkrip diekspor, AI eksternal memilih timestamp, lalu JSON-nya di-import. Tidak ada panggilan Gemini pada alur ini.
 - **AI Shorts** tanpa Gemini memakai template analisis/script lokal; hasilnya lebih generik.
 - **Thumbnail** free mode dibuat dari frame asli + teks, bukan gambar generatif.
 - **Dubbing** free mode memakai terjemahan per segmen + edge-tts; bukan voice cloning seperti ElevenLabs.

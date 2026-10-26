@@ -66,13 +66,13 @@ Kalau ingin memakai notebook dari file lokal: `File` → `Upload notebook`. ZIP 
 
 | Fitur | Tanpa Gemini key | Dengan Gemini key gratis |
 |---|---|---|
-| Clip Generator | Tidak bisa memilih momen viral¹ | Bisa |
+| Clip Generator | Bisa lewat **manual AI selection** (transkrip → AI eksternal → import JSON)¹ | Bisa otomatis |
 | AI Shorts — analisis/script | Template lokal generik | Analisis produk + script lebih relevan |
 | YouTube Studio — judul/deskripsi | Fallback dari transkrip | Judul/deskripsi lebih kreatif |
 | Thumbnail | Frame + teks | Tetap frame + teks (free mode) |
 | Dubbing | Google Translate web | Terjemahan Gemini (lebih rapi) |
 
-¹ Bisa juga memakai LLM lokal lewat `LLM_BASE_URL` (Ollama/LM Studio/vLLM), tetapi tidak dijalankan otomatis oleh notebook ini karena butuh RAM/VRAM tambahan.
+¹ Manual AI selection tidak memanggil Gemini sama sekali. Alternatif otomatis tanpa Google tetap bisa memakai LLM lokal lewat `LLM_BASE_URL` (Ollama/LM Studio/vLLM), tetapi notebook tidak menjalankannya otomatis karena butuh RAM/VRAM tambahan.
 
 ### 2.3 Jalankan
 
@@ -85,6 +85,36 @@ Kalau ingin memakai notebook dari file lokal: `File` → `Upload notebook`. ZIP 
 > Kalau menjalankan ulang cell **4**, `UPDATE_PROJECT=True` akan mengambil versi terbaru dari GitHub. File `.env`, `output/`, dan cache model tetap aman karena tidak dilacak git.
 
 > Pertama kali memakai AI Shorts, model SDXL (~7 GB) dan Wav2Lip (~520 MB) diunduh otomatis. Ini bisa memakan 5–15 menit. Untuk mengunduh lebih awal, jalankan cell **8** dengan `PRELOAD_SDXL=True`.
+
+### 2.4 Pilih momen tanpa Gemini (manual AI selection)
+
+Kalau kuota Gemini habis (`429`) atau kamu ingin memakai ChatGPT/Claude/model lokal untuk memilih hook, aktifkan **manual AI selection** di **advanced options** sebelum menekan tombol proses.
+
+1. Centang **manual AI selection (no Gemini)**.
+2. Klik proses. Whisper tetap membuat transkrip, lalu job berhenti di status **MANUAL AI**. Belum ada render dan tidak ada panggilan Gemini pada tahap ini.
+3. Di panel kanan, klik **download transcript**. File `openshorts_transcript_<id>.json` berisi transkrip bertimestamp, kandidat window, durasi target, jumlah klip yang disarankan, dan prompt siap pakai.
+4. Berikan file itu ke AI apa pun (ChatGPT, Claude, Gemini web, Ollama, LM Studio). Minta AI mengembalikan satu objek JSON sesuai `output_contract` di dalam file. Markdown fence diperbolehkan.
+5. Klik **import ai result** dan pilih jawaban AI. Aplikasi memvalidasi timestamp, merapikan potongan ke batas kata, membuang klip yang tumpang tindih, lalu merender seperti biasa.
+6. Kalau ada timestamp yang dikoreksi (mis. negatif, melewati durasi, atau skor di luar 0–100), peringatannya muncul di panel/log. Import tetap dilanjutkan.
+
+Format minimum yang bisa di-import:
+
+```json
+{
+  "clips": [
+    { "start": 12.5, "end": 42.0, "score": 85, "title": "Judul Shorts", "hook": "Hook 10 kata" }
+  ]
+}
+```
+
+Catatan:
+
+- `start` dan `end` memakai **detik absolut** dari awal video sumber.
+- `title`, `hook`, `reason`, dan deskripsi opsional; kalau kosong, app mengisi dari transkrip.
+- Import juga menerima `shorts` dan nama field metadata internal, jadi kamu bisa menempel `*_metadata.json` dari job lama.
+- Kalau job otomatis gagal karena kuota tetapi transkrip sudah tersimpan, panel manual tetap muncul di status error.
+- Panel ini hanya ada di self-host/free mode, bukan di cloud berbayar.
+- Setelah import, Gemini tidak dipakai lagi untuk layout atau hook grounding; render memakai pilihan klip dari AI eksternal.
 
 ---
 
@@ -136,7 +166,7 @@ OpenShorts bisa memposting ke TikTok, Instagram Reels, dan YouTube Shorts lewat 
 | Wav2Lip | Lip-sync pada foto statis. Kualitas di bawah avatar berbayar, tetapi gratis dan lokal. |
 | Dubbing | Terjemahan per segmen, bukan voice cloning. Panjang audio disesuaikan agar sinkron. |
 | Thumbnail | Komposisi frame asli + teks, bukan gambar AI generatif. Hasilnya konsisten dengan video. |
-| Clip Generator | Butuh Gemini free tier atau LLM lokal. Tanpa itu, tahap pemilihan momen tidak bisa dijalankan. |
+| Clip Generator | Otomatis butuh Gemini free tier atau LLM lokal. Tanpa keduanya, pakai **manual AI selection**: unduh transkrip, minta AI eksternal memilih timestamp, lalu import JSON. Tidak ada panggilan Gemini. |
 | YouTube URL | IP datacenter Colab sering ditolak YouTube. Kalau gagal, download video di komputer lalu upload ke dashboard. |
 | Kuota Gemini | Free tier punya batas RPM/RPD. Kalau kena `429`, tunggu atau ganti key. |
 | Publishing | Upload-Post free tier terbatas; tidak ada auto-post gratis tanpa layanan pihak ketiga. |
@@ -162,6 +192,7 @@ OpenShorts bisa memposting ke TikTok, Instagram Reels, dan YouTube Shorts lewat 
 ```
 /content/openshorts/
 ├── app.py                  # FastAPI + static dashboard
+├── manual_clip_selection.py # ekspor transkrip + validasi import AI eksternal
 ├── free_backends.py        # semua provider gratis/lokal
 ├── face_detection_compat.py # MediaPipe/OpenCV face detection
 ├── saasshorts.py           # pipeline AI Shorts
@@ -204,7 +235,9 @@ Default notebook memakai repo <https://github.com/ardyhim/openshorts.git> dan **
 | SDXL lambat / download macet | Jalankan cell 8 `PRELOAD_SDXL=True`; cek koneksi dan sisa disk. |
 | Wav2Lip gagal | Pipeline otomatis memakai still image + audio. Cek `server.log`. |
 | Gemini `404` | Jalankan ulang cell 6 dengan key; model dipilih dari daftar yang tersedia. |
-| Gemini `429` | Kuota free tier habis. Tunggu beberapa menit/hari. |
+| Gemini `429` | Kuota free tier habis. Tunggu beberapa menit/hari, ganti key, atau centang **manual AI selection** lalu ikuti bagian 2.4 (tanpa Gemini). |
+| Panel **MANUAL AI** tidak muncul | Pastikan server berjalan dengan `FREE_MODE=1` / `BILLING_ENABLED=0` dan job dijalankan dengan opsi manual. Di cloud berbayar fitur ini memang tidak tersedia. Kalau video tidak punya suara, transkrip tidak bisa dibuat; pakai clip generation otomatis. |
+| Import JSON ditolak | Pastikan `start` < `end`, memakai detik absolut, dan tidak melewati durasi video. Baca pesan validasi di panel. Markdown fence diperbolehkan. |
 | `yt-dlp` gagal | Upload file video langsung, bukan URL YouTube. |
 | Dashboard tidak muncul | Cek cell 12 (`server.log`), pastikan cell 10 sukses dan port 8000 hidup. |
 | `npm ci` gagal | Pastikan Node.js >= 18. Cell 3 memasang Node 22 bila perlu. |

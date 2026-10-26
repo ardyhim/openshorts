@@ -33,6 +33,8 @@ import recut
 import layout_ranges
 import watermarked
 import media_auth
+import manual_clip_selection
+from clip_selection import clip_duration_bounds
 
 load_dotenv()
 
@@ -149,6 +151,16 @@ SOURCE_RETENTION_SECONDS = int(
 )
 # Force full pipeline logs to the client even under billing (local debugging).
 DEBUG_LOGS = os.environ.get("DEBUG_LOGS", "").lower() in ("1", "true", "yes")
+
+# Manual AI selection (Gemini-free clip picking). The transcript checkpoint is
+# written by main.py; the dashboard exports it, the user's AI answers, and the
+# import endpoint writes the files a second main.py run consumes.
+TRANSCRIPT_CHECKPOINT_FILE = ".transcript_checkpoint.json"
+MANUAL_MARKER_FILE = ".manual_analysis"
+SOURCE_TRANSCRIPT_FILE = "source_transcript.json"
+MANUAL_SELECTION_FILE = "manual_selection.json"
+MANUAL_EXPORT_FILE = "transcript_export.json"
+MANUAL_IMPORT_MAX_BYTES = 5 * 1024 * 1024
 
 if BILLING_ENABLED:
     import cloud
@@ -1036,12 +1048,13 @@ def _recut_captioner(clip):
 
 
 def _recover_jobs_from_disk():
-    """Rebuild completed jobs from OUTPUT_DIR after a restart (issue #46 / #18).
+    """Rebuild terminal jobs from OUTPUT_DIR after a restart (issue #46 / #18).
 
     Jobs live in memory, so a restart used to orphan finished clips that are
     still on disk: the frontend restores the job_id from localStorage but every
-    endpoint answers 404 "Job not found". Rebuild a minimal completed record
-    for each job directory that has a metadata JSON.
+    endpoint answers 404 "Job not found". Rebuild a minimal record for each job
+    directory with a metadata JSON, plus transcript-only jobs waiting for manual
+    AI analysis (or that failed after transcription).
     """
     recovered = 0
     try:
@@ -1056,6 +1069,26 @@ def _recover_jobs_from_disk():
             continue  # in flight (interrupted or on the other instance): resume, not recover
         json_files = glob.glob(os.path.join(job_path, "*_metadata.json"))
         if not json_files:
+            if not os.path.isfile(os.path.join(job_path, TRANSCRIPT_CHECKPOINT_FILE)):
+                continue
+            owner = None
+            owner_path = os.path.join(job_path, ".owner")
+            if os.path.exists(owner_path):
+                with open(owner_path) as f:
+                    raw = f.read().strip()
+                owner = int(raw) if raw.isdigit() else (raw or None)
+            manual = os.path.isfile(os.path.join(job_path, MANUAL_MARKER_FILE))
+            jobs[job_id] = {
+                'status': 'awaiting_analysis' if manual else 'failed',
+                'logs': _TimedLog([
+                    "♻️ Transcript recovered after a server restart. "
+                    + ("Download it and import your AI's clips." if manual
+                       else "It is available for manual AI analysis.")]),
+                'output_dir': job_path,
+                'user_id': owner,
+                'result': None,
+            }
+            recovered += 1
             continue
         try:
             with open(json_files[0], 'r') as f:
@@ -1084,7 +1117,7 @@ def _recover_jobs_from_disk():
         except Exception as e:
             print(f"⚠️ Could not recover job {job_id}: {e}")
     if recovered:
-        print(f"♻️  Recovered {recovered} completed job(s) from disk.")
+        print(f"♻️  Recovered {recovered} terminal job(s) from disk.")
 
 
 # --- Mid-flight job resume (survive a redeploy without losing work) ----------
@@ -1521,6 +1554,9 @@ def _resume_interrupted_jobs() -> set:
             'cmd': m.get("cmd"),
             'env': env,
             'output_dir': job_path,
+            # The command is the only durable record of this route; a resumed
+            # prepare-manual run must still pause after transcription.
+            'manual_analysis': '--prepare-manual' in (m.get("cmd") or []),
             'user_id': None if user_id is None else user_id,
             'reservation_id': reservation_id,
             'watermark': bool(m.get("watermark")),
@@ -1947,18 +1983,25 @@ def _should_auto_retry(job) -> bool:
                 and job.get('cmd') and is_transient_failure(job.get('logs')))
 
 
-def _clean_for_retry(output_dir):
+def _clean_for_retry(output_dir, keep=()):
     """Drop the half-made outputs of a failed run; keep the source, the
-    transcript checkpoint (the retry skips transcription), owner and manifest."""
+    transcript checkpoint (the retry skips transcription), owner and manifest.
+
+    ``keep`` holds source paths: a downloaded video whose title contains
+    ``_clip_`` (or any other cleanup token) must not be deleted."""
+    keep = {os.path.abspath(p) for p in keep if p}
     try:
         names = os.listdir(output_dir)
     except OSError:
         return
     for name in names:
+        path = os.path.join(output_dir, name)
+        if os.path.abspath(path) in keep:
+            continue
         if ("_clip_" in name or name.endswith("_metadata.json")
                 or name.startswith(("temp_", "hooked_", "autosubs_"))):
             try:
-                os.remove(os.path.join(output_dir, name))
+                os.remove(path)
             except OSError:
                 pass
 
@@ -1970,7 +2013,16 @@ def _schedule_auto_retry(job_id, job):
     job['ready_files'] = {}
     job['logs'].append("🔁 A temporary server problem interrupted your video. "
                        "Retrying it automatically, no minutes are charged twice.")
-    _clean_for_retry(job.get('output_dir') or os.path.join(OUTPUT_DIR, job_id))
+    # Keep the source: a downloaded video whose title contains a cleanup token
+    # (``_clip_``, ``hooked_``) must survive the retry.
+    keep_source = job.get('source_path')
+    if not keep_source:
+        try:
+            keep_source = _job_source_path(job_id, job)
+        except Exception:
+            keep_source = None
+    _clean_for_retry(job.get('output_dir') or os.path.join(OUTPUT_DIR, job_id),
+                     keep=(keep_source,))
     m = _read_manifest(job_id) or {}
     priority = int(m.get("priority", 1))
     print(f"🔁 Auto-retry {job['auto_retries']}/{AUTO_RETRY_LIMIT} for {job_id} "
@@ -2023,6 +2075,8 @@ def _archive_clip_edit_bg(job_id: str, clip_index: int, filename: str):
 async def _autopilot_job_finished(job_id, job):
     if not BILLING_ENABLED or not job or not job.get('user_id'):
         return
+    if job.get('status') == 'awaiting_analysis':
+        return  # paused for manual clip selection, not finished yet
     try:
         reason = None
         if job.get('status') != 'completed':
@@ -2273,6 +2327,10 @@ async def _notify_job_webhook(job_id):
     job = jobs.get(job_id) or {}
     url = job.get('webhook_url')
     if not url or job.get('webhook_sent'):
+        return
+    if job.get('status') == 'awaiting_analysis':
+        # Manual analysis paused the job by design. Don't report failure; the
+        # webhook fires when the imported selection finishes (or fails).
         return
     job['webhook_sent'] = True
     completed = job.get('status') == 'completed'
@@ -2729,6 +2787,29 @@ async def run_job(job_id, job_data):
         returncode = process.returncode
         
         if returncode == 0:
+            # Find result JSON before declaring success: a manual-analysis run
+            # finishes after transcription and deliberately has none.
+            json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+            if not json_files:
+                # Backward-compat rescue if outputs were written to OUTPUT_DIR root
+                if _relocate_root_job_artifacts(job_id, output_dir):
+                    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+            if not json_files and (job_data.get('manual_analysis')
+                                   or '--prepare-manual' in cmd):
+                checkpoint = os.path.join(output_dir, TRANSCRIPT_CHECKPOINT_FILE)
+                if os.path.isfile(checkpoint):
+                    jobs[job_id]['status'] = 'awaiting_analysis'
+                    jobs[job_id]['result'] = None
+                    jobs[job_id]['analysis_summary'] = None
+                    jobs[job_id]['logs'].append(
+                        "📄 Transcript ready. Download it, ask any AI for clip "
+                        "timestamps, then import its JSON to render.")
+                    return
+                jobs[job_id]['status'] = 'failed'
+                jobs[job_id]['logs'].append(
+                    "Manual analysis stopped before a transcript was produced.")
+                return
+
             jobs[job_id]['status'] = 'completed'
             jobs[job_id]['logs'].append("Process finished successfully.")
             
@@ -2738,12 +2819,6 @@ async def run_job(job_id, job_data):
                 loop = asyncio.get_event_loop()
                 loop.run_in_executor(None, upload_job_artifacts, output_dir, job_id)
             
-            # Find result JSON
-            json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-            if not json_files:
-                # Backward-compat rescue if outputs were written to OUTPUT_DIR root
-                if _relocate_root_job_artifacts(job_id, output_dir):
-                    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
             if json_files:
                 target_json = json_files[0] 
                 with open(target_json, 'r') as f:
@@ -2818,6 +2893,10 @@ async def get_config():
         "freeTts": bool(FREE_MODE),
         "freeImages": bool(FREE_MODE),
         "freeDubbing": bool(FREE_MODE),
+        # Self-host/free mode can pause after transcription, export the
+        # transcript for any AI, and import structured clip picks. Cloud
+        # metering assumes one continuous job, so it stays off there.
+        "manualAnalysis": not BILLING_ENABLED,
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
@@ -3107,14 +3186,9 @@ async def process_endpoint(
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
     max_minutes: Optional[str] = Form(None),
+    analysis_mode: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
-    if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
-        # Self-host with an OpenAI-compatible server configured needs no
-        # Google key for the core pipeline: the moment picker runs there and
-        # the frame-based stages degrade on their own (layout_picker returns
-        # "none", silent videos fail with a message that says why).
-        raise gemini_missing_error()
 
     ack_flag = str(acknowledged).lower() in ("1", "true", "yes")
     # May be lowered by the paid-proxy budget check in the metering block
@@ -3142,6 +3216,27 @@ async def process_endpoint(
         captions = body.get("captions")
         upload_id = body.get("upload_id")
         max_minutes = body.get("max_minutes")
+        analysis_mode = body.get("analysis_mode")
+
+    # Manual selection pauses after transcription so the user can pick clips
+    # with an external AI. It makes no Gemini call, so it must be resolved
+    # before the API-key gate below.
+    analysis_mode = str(analysis_mode or "auto").strip().lower()
+    if analysis_mode not in ("auto", "manual"):
+        raise HTTPException(status_code=400,
+                            detail="analysis_mode must be 'auto' or 'manual'")
+    manual_analysis = analysis_mode == "manual"
+    if manual_analysis and BILLING_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Manual transcript analysis is available in self-host/free "
+                   "mode only.")
+    if not manual_analysis and not api_key and not (llm_backend.active() and not BILLING_ENABLED):
+        # Self-host with an OpenAI-compatible server configured needs no
+        # Google key for the core pipeline: the moment picker runs there and
+        # the frame-based stages degrade on their own (layout_picker returns
+        # "none", silent videos fail with a message that says why).
+        raise gemini_missing_error()
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -3225,7 +3320,13 @@ async def process_endpoint(
     if not paid_allowed:
         # Daily paid-proxy budget hit: this job runs on the free routes only.
         env.pop("PROXY_URL", None)
-    if api_key:
+    if manual_analysis:
+        # The whole point of this mode is to avoid Gemini. If the server has a
+        # key, keep it out of this job: layout picking and hook grounding must
+        # not spend the quota the user is trying to preserve.
+        env.pop("GEMINI_API_KEY", None)
+        env["HOOK_GROUNDING"] = "0"
+    elif api_key:
         env["GEMINI_API_KEY"] = api_key # Override with key from request
     elif not FREE_MODE:
         env.pop("GEMINI_API_KEY", None)  # local-LLM job: main.py must not find a stale key
@@ -3368,6 +3469,13 @@ async def process_endpoint(
     cmd.extend(["-o", job_output_dir])
     if output_format and output_format != "auto":
         cmd.extend(["--format", output_format])
+    if manual_analysis:
+        cmd.append("--prepare-manual")
+        # Survives the process exit so a restart knows this job is waiting for
+        # a user-supplied answer, not dead.
+        with open(os.path.join(job_output_dir, MANUAL_MARKER_FILE), "w") as f:
+            f.write("1")
+        print(f"[manual-analysis] job={job_id} will pause after transcription")
 
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 
@@ -3429,6 +3537,12 @@ async def process_endpoint(
         'cmd': cmd,
         'env': env,
         'output_dir': job_output_dir,
+        # Where the source lives, when we already know it. Uploads and Studio
+        # handovers do; URL jobs get it after main.py downloads, so import
+        # falls back to searching the job directory.
+        'source_path': input_path,
+        'manual_analysis': manual_analysis,
+        'priority': priority,
         'attestation': attestation,
         'user_id': user_id,
         'reservation_id': reservation_id,
@@ -3468,6 +3582,195 @@ async def process_endpoint(
     return {"job_id": job_id, "status": "queued", "partial": partial,
             "first_video": bool(getattr(request.state, "first_video", False))}
 
+def _job_dir_for(job_id, job=None):
+    return (job or {}).get('output_dir') or os.path.join(OUTPUT_DIR, job_id)
+
+
+def _read_job_transcript(job_id, job=None):
+    """(transcript, duration, source) for a job, from checkpoint or metadata.
+
+    The checkpoint is the file main.py writes before Gemini runs, so it is the
+    one that still exists after a quota failure. Completed jobs cleared it and
+    keep the same transcript in their metadata JSON instead.
+    """
+    job_dir = _job_dir_for(job_id, job)
+    checkpoint = os.path.join(job_dir, TRANSCRIPT_CHECKPOINT_FILE)
+    if os.path.isfile(checkpoint):
+        try:
+            with open(checkpoint, 'r', encoding='utf-8') as f:
+                payload = json.load(f)
+            transcript = payload.get('transcript') or {}
+            if transcript.get('segments'):
+                source = payload.get('source') or {}
+                try:
+                    duration = float(source.get('duration') or 0)
+                except (TypeError, ValueError):
+                    duration = 0.0
+                if not math.isfinite(duration) or duration <= 0:
+                    # A checkpoint without a usable duration still has timed
+                    # segments; use their end so import can validate timestamps.
+                    try:
+                        duration = max(
+                            (float(s.get('end') or 0)
+                             for s in transcript.get('segments') or []),
+                            default=0.0)
+                    except (TypeError, ValueError):
+                        duration = 0.0
+                    if not math.isfinite(duration):
+                        duration = 0.0
+                return transcript, duration, "checkpoint"
+        except Exception as e:
+            print(f"⚠️ Could not read transcript checkpoint for {job_id}: {e}")
+
+    metas = sorted(glob.glob(os.path.join(job_dir, "*_metadata.json")),
+                   key=lambda p: os.path.getmtime(p), reverse=True)
+    for meta_path in metas:
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            transcript = data.get('transcript') or {}
+            if not transcript.get('segments'):
+                continue
+            duration = 0.0
+            try:
+                duration = float(data.get('duration') or 0)
+            except (TypeError, ValueError):
+                pass
+            if not math.isfinite(duration) or duration <= 0:
+                duration = max(
+                    (float(s.get('end') or 0)
+                     for s in transcript.get('segments') or []),
+                    default=0.0)
+            if not math.isfinite(duration):
+                duration = 0.0
+            return transcript, duration, "metadata"
+        except Exception:
+            continue
+    return None, 0.0, None
+
+
+def _manual_clip_bounds(job=None):
+    """The job's clip band, computed the way its subprocess will see it."""
+    env = dict(os.environ)
+    env.update((job or {}).get('env') or {})
+    return clip_duration_bounds(env)
+
+
+def _job_analysis_summary(job_id, job):
+    """What the dashboard needs to offer export/import, or None."""
+    if not job or job.get('status') not in ('awaiting_analysis', 'failed', 'completed'):
+        return None
+    cached = job.get('analysis_summary')
+    if cached is not None:
+        return cached
+    transcript, duration, source = _read_job_transcript(job_id, job)
+    if not transcript:
+        return {'available': False}
+    lo, hi = _manual_clip_bounds(job)
+    try:
+        payload = manual_clip_selection.build_transcript_export(
+            transcript, duration, job_id=job_id,
+            min_secs=lo, max_secs=hi)
+    except Exception as e:
+        print(f"⚠️ Could not build analysis summary for {job_id}: {e}")
+        return {'available': False}
+    summary = {
+        'available': True,
+        'source': source,
+        'segments': len(payload['transcript']['segments']),
+        'windows': len(payload['windows']),
+        'duration_seconds': payload['duration_seconds'],
+        'language': payload['language'],
+        'recommended_clip_count': payload['recommended_clip_count'],
+        'export_url': f"/api/jobs/{job_id}/analysis/export",
+    }
+    job['analysis_summary'] = summary
+    return summary
+
+
+def _job_source_path(job_id, job):
+    """The original media file, if it still exists on this instance."""
+    direct = (job or {}).get('source_path')
+    if direct and os.path.isfile(direct):
+        return direct
+    found = _locate_source(job_id)
+    if found and os.path.isfile(found):
+        return found
+    job_dir = _job_dir_for(job_id, job)
+    # A URL download is named after the video, whose title may itself contain a
+    # cleanup token ("How I edit_clip_faster"). The checkpoint recorded the
+    # exact basename main.py used, so try it before guessing by extension.
+    checkpoint = os.path.join(job_dir, TRANSCRIPT_CHECKPOINT_FILE)
+    try:
+        with open(checkpoint, 'r', encoding='utf-8') as f:
+            recorded = ((json.load(f).get('source') or {}).get('name') or '')
+        if recorded:
+            candidate = os.path.join(job_dir, os.path.basename(recorded))
+            if os.path.isfile(candidate):
+                return candidate
+    except Exception:
+        pass
+    # URL jobs keep the download in the job dir (--keep-original). Pick the
+    # largest media file that is not one of our rendered outputs.
+    skip = ("_clip_", "temp_", "hooked_", "subtitled_", "wm_", "hook_",
+            "_vertical")
+    candidates = []
+    try:
+        for name in os.listdir(job_dir):
+            if not name.lower().endswith((".mp4", ".mkv", ".webm", ".mov",
+                                          ".m4v", ".avi")):
+                continue
+            if any(token in name for token in skip):
+                continue
+            path = os.path.join(job_dir, name)
+            try:
+                candidates.append((os.path.getsize(path), path))
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return max(candidates, key=lambda c: c[0])[1] if candidates else None
+
+
+def _job_output_format(job_id, job):
+    cmd = list((job or {}).get('cmd') or [])
+    try:
+        return cmd[cmd.index('--format') + 1]
+    except (ValueError, IndexError):
+        pass
+    for meta_path in glob.glob(os.path.join(_job_dir_for(job_id, job),
+                                            "*_metadata.json")):
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                return json.load(f).get('output_format') or 'auto'
+        except Exception:
+            continue
+    return 'auto'
+
+
+def _manual_rerun_command(job_id, job, source_path, transcript_path,
+                          selection_path):
+    """A main.py command that skips transcription, skips Gemini, renders."""
+    job_dir = _job_dir_for(job_id, job)
+    cmd = [sys.executable, "-u", "main.py"]
+    if source_path:
+        cmd.extend(["-i", source_path])
+    else:
+        url = _job_source_url(job)
+        if not url:
+            raise HTTPException(
+                status_code=409,
+                detail="The source video is no longer on this server. Start a "
+                       "new job with the same video and choose manual analysis.")
+        cmd.extend(["-u", url, "--keep-original"])
+    cmd.extend(["-o", job_dir])
+    output_format = _job_output_format(job_id, job)
+    if output_format and output_format != "auto":
+        cmd.extend(["--format", output_format])
+    cmd.extend(["--transcript", transcript_path, "--clips-file", selection_path])
+    return cmd
+
+
 def _job_view_from_disk(job_id):
     """What the disk says about a job this instance does not hold in memory.
 
@@ -3484,6 +3787,27 @@ def _job_view_from_disk(job_id):
         if glob.glob(os.path.join(job_path, "*_metadata.json")):
             _recover_jobs_from_disk()
             return jobs.get(job_id)
+        checkpoint = os.path.join(job_path, TRANSCRIPT_CHECKPOINT_FILE)
+        if os.path.isfile(checkpoint):
+            manual = os.path.isfile(os.path.join(job_path, MANUAL_MARKER_FILE))
+            owner = None
+            owner_path = os.path.join(job_path, ".owner")
+            if os.path.exists(owner_path):
+                with open(owner_path) as f:
+                    raw = f.read().strip()
+                owner = int(raw) if raw.isdigit() else (raw or None)
+            logs = ("♻️ Transcript recovered after a server restart. "
+                    "Download it and import your AI's clips."
+                    if manual else
+                    "♻️ This job stopped before clip selection. The transcript "
+                    "is available for manual AI analysis.")
+            return {
+                'status': 'awaiting_analysis' if manual else 'failed',
+                'logs': _TimedLog([logs]),
+                'output_dir': job_path,
+                'user_id': owner,
+                'result': None,
+            }
         return None
     alive = time.time() - float(m.get("heartbeat") or 0) < HEARTBEAT_STALE_AFTER
     owner = m.get("user_id")
@@ -3526,6 +3850,161 @@ async def get_status(job_id: str, request: Request):
         # Set when only the first part of the source was clipped (quota wall
         # offer), so the dashboard can say so next to the clips.
         "partial": job.get('partial'),
+        # Gemini-free route: the exported transcript + import controls.
+        "analysis": _job_analysis_summary(job_id, job),
+    }
+
+
+@app.get("/api/jobs/{job_id}/analysis/export")
+async def export_job_analysis(job_id: str, request: Request):
+    """Download the structured transcript for analysis by any external AI."""
+    job = jobs.get(job_id) or _job_view_from_disk(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    await _assert_job_owner(request, job)
+
+    transcript, duration, _ = _read_job_transcript(job_id, job)
+    if not transcript:
+        raise HTTPException(
+            status_code=404,
+            detail="This job has no transcript to export. Manual analysis "
+                   "needs a source with speech.")
+    lo, hi = _manual_clip_bounds(job)
+    payload = manual_clip_selection.build_transcript_export(
+        transcript, duration, job_id=job_id, min_secs=lo, max_secs=hi)
+    job_dir = _job_dir_for(job_id, job)
+    os.makedirs(job_dir, exist_ok=True)
+    path = os.path.join(job_dir, MANUAL_EXPORT_FILE)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return FileResponse(
+        path, media_type="application/json",
+        filename=f"openshorts_transcript_{job_id[:8]}.json")
+
+
+async def _read_import_body(request: Request) -> str:
+    """Raw text from a JSON body or a multipart file upload."""
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None:
+            raise HTTPException(status_code=400,
+                                detail="Attach the AI's JSON as the 'file' field.")
+        raw = await upload.read()
+    else:
+        raw = await request.body()
+    if len(raw) > MANUAL_IMPORT_MAX_BYTES:
+        raise HTTPException(status_code=413,
+                            detail="The clip selection file is too large.")
+    if not raw:
+        raise HTTPException(status_code=400, detail="The clip selection is empty.")
+    return raw.decode("utf-8", errors="replace")
+
+
+@app.post("/api/jobs/{job_id}/analysis/import")
+async def import_job_analysis(job_id: str, request: Request):
+    """Validate an external AI's clip picks and render them.
+
+    The answer may be the documented ``clips`` contract or the app's own
+    ``shorts`` metadata shape, with or without markdown fences.
+    """
+    if BILLING_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Manual transcript analysis is available in self-host/free "
+                   "mode only.")
+    job = jobs.get(job_id) or _job_view_from_disk(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    await _assert_job_owner(request, job)
+    if job.get('status') in ('queued', 'processing'):
+        raise HTTPException(
+            status_code=409,
+            detail="This job is still running. Wait for it to finish before "
+                   "importing a selection.")
+
+    transcript, duration, _ = _read_job_transcript(job_id, job)
+    if not transcript:
+        raise HTTPException(
+            status_code=404,
+            detail="This job has no transcript, so an imported selection "
+                   "cannot be rendered.")
+    lo, hi = _manual_clip_bounds(job)
+    raw_text = await _read_import_body(request)
+    try:
+        parsed = manual_clip_selection.parse_selection_payload(
+            raw_text, duration=duration, min_secs=lo, max_secs=hi,
+            transcript=transcript)
+    except manual_clip_selection.SelectionError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    job_dir = _job_dir_for(job_id, job)
+    transcript_path = os.path.join(job_dir, SOURCE_TRANSCRIPT_FILE)
+    selection_path = os.path.join(job_dir, MANUAL_SELECTION_FILE)
+    with open(transcript_path, 'w', encoding='utf-8') as f:
+        json.dump(transcript, f, ensure_ascii=False)
+    with open(selection_path, 'w', encoding='utf-8') as f:
+        json.dump({"schema": manual_clip_selection.SELECTION_SCHEMA,
+                   "clips": parsed["clips"]}, f, ensure_ascii=False, indent=2)
+
+    source_path = _job_source_path(job_id, job)
+    cmd = _manual_rerun_command(job_id, job, source_path, transcript_path,
+                                selection_path)
+    env = dict(job.get('env') or child_env())
+    # This route must never spend Gemini quota; the imported answer already
+    # contains everything the renderer needs.
+    env.pop('GEMINI_API_KEY', None)
+    env.pop('MAX_SOURCE_MINUTES', None)
+    env.pop('SOURCE_CAP_MINUTES', None)
+    env['HOOK_GROUNDING'] = '0'
+    env.setdefault('PYTHONIOENCODING', 'utf-8')
+
+    _clean_for_retry(job_dir, keep=(source_path,))
+    # source_transcript.json is written above and survives the cleanup; the
+    # checkpoint (if any) is preserved on purpose by _clean_for_retry.
+    job.update({
+        'status': 'queued',
+        'cmd': cmd,
+        'env': env,
+        'output_dir': job_dir,
+        'source_path': source_path or job.get('source_path'),
+        'manual_analysis': False,
+        'result': None,
+        'ready_files': {},
+        'auto_retries': 0,
+        # A new selection invalidates the export summary cached for the old
+        # state; the dashboard recomputes it if this rerun fails.
+        'analysis_summary': None,
+        # The failed/awaiting run already settled its reservation; this rerun
+        # must not try to commit or release it a second time.
+        'reservation_id': None,
+        'logs': _TimedLog([
+            f"Imported {len(parsed['clips'])} clip(s) from an external AI. "
+            "Rendering…",
+        ]),
+    })
+    # A job rebuilt from disk (server restart, or a failed job recovered from its
+    # checkpoint) is not in ``jobs``. The worker dispatches by id from that dict,
+    # so publish the record before enqueueing or the rerun would be a no-op.
+    jobs[job_id] = job
+    priority = int(job.get('priority') or 2)
+    _write_resume_manifest(
+        job_id, cmd, priority, job.get('user_id'), None,
+        watermark=bool(job.get('watermark') or env.get('WATERMARK') == '1'),
+        webhook_url=job.get('webhook_url'),
+        webhook_secret=job.get('webhook_secret'),
+        base_url=job.get('base_url') or str(request.base_url).rstrip('/'),
+        partial=None, source_cap_minutes=None, skip_statics=False,
+        via_api_key=bool(job.get('via_api_key')))
+    _enqueue_job(job_id, priority)
+    print(f"[manual-analysis] job={job_id} imported {len(parsed['clips'])} "
+          f"clip(s); source={'file' if source_path else 'url'}")
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "clips": len(parsed["clips"]),
+        "warnings": parsed.get("warnings") or [],
     }
 
 

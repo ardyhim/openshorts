@@ -4,6 +4,7 @@ import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
 import ResultCard from './components/ResultCard';
+import ManualAnalysisPanel from './components/ManualAnalysisPanel';
 import ProcessingAnimation from './components/ProcessingAnimation';
 // import Gallery from './components/Gallery';
 import ThumbnailStudio from './components/ThumbnailStudio';
@@ -269,12 +270,15 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, freeMode, serverGemini, serverUploadPost } = useAuth();
+  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, freeMode, serverGemini, serverUploadPost, manualAnalysis } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   // Free plan: "want the watermark off?" once per job, when the clips land.
   const [showWmNotice, setShowWmNotice] = useState(false);
   const wmNoticedJobRef = useRef(null);
+  // A restored failed job has no analysis payload in localStorage; remember
+  // which job we already fetched it for so this stays one request per reload.
+  const errorAnalysisFetchedRef = useRef('');
   const [showPlanChoice, setShowPlanChoice] = useState(false);
   const [tutorialPhase, setTutorialPhase] = useState(null); // null | intro | coach | celebrate
   const [showTrialUpgrade, setShowTrialUpgrade] = useState(false);
@@ -288,6 +292,8 @@ function App() {
   const [queueInfo, setQueueInfo] = useState(null);
   // Why the last job could not start or failed, in plain words (or '').
   const [jobError, setJobError] = useState('');
+  // Gemini-free route: transcript/export/import state from /api/status.
+  const [analysisInfo, setAnalysisInfo] = useState(null);
   // Durable R2 URLs (per clip index) for the current job — used as a fallback when
   // the ephemeral local /videos/ files have been cleaned up (e.g. after a reload).
   const [durableClips, setDurableClips] = useState({});
@@ -686,8 +692,10 @@ function App() {
         if (session.noSource) setNoSource(true);
         if (session.projectState) setProjectState(session.projectState);
         if (session.activeTab) setActiveTab(session.activeTab);
-        // If was processing, resume polling; if complete/error, just show results
-        setStatus(session.status === 'processing' ? 'processing' : session.status);
+        // If was processing/awaiting, resume polling; if complete/error, just
+        // show the saved state. Polling also refreshes the awaiting analysis
+        // controls, which are not serialized.
+        setStatus(session.status);
         setSessionRecovered(true);
         setTimeout(() => setSessionRecovered(false), 5000);
       }
@@ -804,11 +812,13 @@ function App() {
 
   useEffect(() => {
     let interval;
-    if ((status === 'processing' || status === 'completed') && jobId) {
+    if ((status === 'processing' || status === 'awaiting' || status === 'completed') && jobId) {
       interval = setInterval(async () => {
         try {
           const data = await pollJob(jobId);
           console.log("Job status:", data);
+
+          if (data.analysis) setAnalysisInfo(data.analysis);
 
           // Update results if available (real-time)
           if (data.result) {
@@ -818,7 +828,17 @@ function App() {
           if (data.partial) setPartialJob(data.partial);
           setQueueInfo(data.status === 'queued' && data.queue ? data.queue : null);
 
-          if (data.status === 'completed') {
+          if (data.status === 'awaiting_analysis') {
+            // main.py transcribed and stopped on purpose. The right panel
+            // offers the export/import controls; polling stays alive so an
+            // import from another tab is picked up.
+            setStatus('awaiting');
+            setQueueInfo(null);
+            if (data.logs) {
+              setLogs(data.logs);
+              setLogTimes(data.log_times || []);
+            }
+          } else if (data.status === 'completed') {
             setQueueInfo(null);
             setStatus('complete');
             clearInterval(interval);
@@ -831,6 +851,10 @@ function App() {
             clearInterval(interval);
             refreshMe();
           } else {
+            // A job imported in another tab may have resumed rendering.
+            if (data.status === 'processing' && status === 'awaiting') {
+              setStatus('processing');
+            }
             // Update logs if available
             if (data.logs) {
               setLogs(data.logs);
@@ -840,10 +864,52 @@ function App() {
         } catch (e) {
           console.error("Polling error", e);
         }
-      }, 2000);
+      }, status === 'awaiting' ? 5000 : 2000);
     }
     return () => clearInterval(interval);
   }, [status, jobId, refreshMe]);
+
+  // A page reload restores "error" from localStorage without the export summary,
+  // so a failed auto job that still has a transcript looked dead: the manual
+  // panel only appeared in the same document where polling had seen it. Fetch
+  // the status once after restoring to bring the panel (and the error text)
+  // back. No-op while polling, which already sets both.
+  useEffect(() => {
+    if (status !== 'error' || !jobId || !manualAnalysis) return;
+    const key = `${jobId}:${status}`;
+    if (errorAnalysisFetchedRef.current === key) return;
+    errorAnalysisFetchedRef.current = key;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await pollJob(jobId);
+        if (cancelled) return;
+        if (data.analysis) setAnalysisInfo(data.analysis);
+        if (data.logs) {
+          setLogs(data.logs);
+          setLogTimes(data.log_times || []);
+        }
+        if (data.status === 'queued' || data.status === 'processing'
+            || data.status === 'awaiting_analysis') {
+          // Someone imported a selection in another tab; resume polling.
+          setStatus(data.status === 'awaiting_analysis' ? 'awaiting' : 'processing');
+          setJobError('');
+          return;
+        }
+        if (data.status === 'completed') {
+          // Imported and rendered while this tab was closed.
+          if (data.result) setResults(data.result);
+          setStatus('complete');
+          setJobError('');
+          return;
+        }
+        const errorMsg = data.error
+          || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : '');
+        if (errorMsg) setJobError(readableError(errorMsg));
+      } catch { /* keep the restored error state */ }
+    })();
+    return () => { cancelled = true; };
+  }, [status, jobId, manualAnalysis]);
 
 
   // silent: background auto-fetch — never alert(), just log. Managed users need
@@ -1060,6 +1126,7 @@ function App() {
     setNoSource(false);
     setPartialJob(null);
     setFirstVideoJob(false);
+    setAnalysisInfo(null);
 
     try {
       let body;
@@ -1082,6 +1149,9 @@ function App() {
         // Set when the user took the quota wall's "clip the first N minutes"
         // offer: the server reserves N minutes and cuts the source to them.
         max_minutes: data.maxMinutes || null,
+        // Manual AI selection: main.py stops after transcription so the
+        // dashboard can export the transcript and import an external answer.
+        analysis_mode: data.manualAnalysis ? 'manual' : null,
       };
 
       if (data.type === 'url') {
@@ -1214,7 +1284,29 @@ function App() {
     setFirstVideoJob(false);
     setQueueInfo(null);
     setJobError('');
+    setAnalysisInfo(null);
     localStorage.removeItem(SESSION_KEY);
+  };
+
+  // The manual panel posts the AI's answer, the server validates it and queues
+  // a Gemini-free render. Surface the count and any clamping warnings in the
+  // live log before polling switches back to the server's own log stream.
+  const handleManualImported = (payload) => {
+    const count = Number(payload?.clips) || 0;
+    const warnings = Array.isArray(payload?.warnings) ? payload.warnings : [];
+    const lines = [
+      count > 0
+        ? `Imported ${count} clip(s) from an external AI. Rendering…`
+        : 'Clip selection imported. Rendering…',
+      ...warnings.map((w) => `Warning: ${w}`),
+    ];
+    setAnalysisInfo(null);
+    setJobError('');
+    setResults(null);
+    setQueueInfo(null);
+    setStatus('processing');
+    setLogs(lines);
+    setLogTimes(lines.map(() => Date.now() / 1000));
   };
 
   // --- UI Components ---
@@ -2108,7 +2200,7 @@ function App() {
                   )}
                 </div>
 
-                <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
+                <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} manualAnalysisEnabled={manualAnalysis} />
 
                 <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-xs sm:text-sm">
                   <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>
@@ -2121,21 +2213,21 @@ function App() {
           )}
 
           {/* View: Processing / Results (Split View) */}
-          {activeTab === 'dashboard' && (status === 'processing' || status === 'complete' || status === 'error') && (
+          {activeTab === 'dashboard' && (status === 'processing' || status === 'complete' || status === 'error' || status === 'awaiting') && (
             <div className="h-full flex flex-col md:flex-row gap-3 md:gap-4 p-3 md:p-4 overflow-y-auto md:overflow-y-hidden custom-scrollbar animate-fade">
 
               {/* Left Panel: Preview & Status */}
-              <div className={`${status === 'complete' ? 'w-full md:w-[30%] lg:w-[25%]' : 'w-full md:w-[55%] lg:w-[60%]'} md:h-full flex flex-col shrink-0 md:shrink card p-3.5 sm:p-6 md:overflow-y-auto custom-scrollbar transition-all duration-700 ease-in-out`}>
+              <div className={`${status === 'complete' ? 'w-full md:w-[30%] lg:w-[25%]' : status === 'awaiting' ? 'w-full md:w-[40%] lg:w-[35%]' : 'w-full md:w-[55%] lg:w-[60%]'} md:h-full flex flex-col shrink-0 md:shrink card p-3.5 sm:p-6 md:overflow-y-auto custom-scrollbar transition-all duration-700 ease-in-out`}>
                 <div className="mb-4 sm:mb-6 flex items-center justify-between gap-2">
                   <h2 className="text-sm font-medium text-ink lowercase flex items-center gap-2">
-                    <Activity className={`text-brass ${status === 'processing' ? 'animate-pulse' : ''}`} size={18} />
+                    <Activity className={`text-brass ${status === 'processing' || status === 'awaiting' ? 'animate-pulse' : ''}`} size={18} />
                     Live Analysis
                   </h2>
-                  <span className={status === 'processing' ? 'badge-brass' :
+                  <span className={(status === 'processing' || status === 'awaiting') ? 'badge-brass' :
                     status === 'complete' ? 'badge-ok' :
                       'badge-danger'
                     }>
-                    {status.toUpperCase()}
+                    {status === 'awaiting' ? 'MANUAL AI' : status.toUpperCase()}
                   </span>
                 </div>
 
@@ -2171,8 +2263,9 @@ function App() {
                   </div>
                 )}
 
-                {/* Video Preview */}
-                {processingMedia && (
+                {/* Video Preview. Hidden while waiting for the user's AI: the
+                    scan animation would imply work that is not happening. */}
+                {processingMedia && status !== 'awaiting' && (
                   <ProcessingAnimation
                     media={processingMedia}
                     isComplete={status === 'complete'}
@@ -2240,13 +2333,13 @@ function App() {
               </div>
 
               {/* Right Panel: Results Grid */}
-              <div className={`${status === 'complete' ? 'w-full md:w-[70%] lg:w-[75%]' : 'w-full md:w-[45%] lg:w-[40%]'} md:h-full flex flex-col shrink-0 md:shrink card p-3.5 sm:p-6 transition-all duration-700 ease-in-out`}>
+              <div className={`${status === 'complete' ? 'w-full md:w-[70%] lg:w-[75%]' : status === 'awaiting' ? 'w-full md:w-[60%] lg:w-[65%]' : 'w-full md:w-[45%] lg:w-[40%]'} md:h-full flex flex-col shrink-0 md:shrink card p-3.5 sm:p-6 transition-all duration-700 ease-in-out`}>
                 {/* Title + counters on one row, the two actions on their own row
                     below. Wrapping them all together dropped a lone half-width
                     "schedule week" pill under the title on a phone. */}
                 <div className="mb-4 sm:mb-6 shrink-0 space-y-3">
                   <h2 className="font-display lowercase text-lg sm:text-xl text-ink flex flex-wrap items-center gap-2">
-                    <span className="mr-auto">Generated Shorts</span>
+                    <span className="mr-auto">{status === 'awaiting' ? 'Manual AI Selection' : 'Generated Shorts'}</span>
                     {results?.clips?.length > 0 && (
                       <span className="readout bg-paper3 px-2.5 py-1 rounded-full">
                         {results.clips.length} Clips
@@ -2414,9 +2507,28 @@ function App() {
                           They appear here one by one as each finishes rendering.
                         </p>
                       </div>
+                    ) : status === 'awaiting' ? (
+                      <ManualAnalysisPanel
+                        jobId={jobId}
+                        info={analysisInfo}
+                        onImported={handleManualImported}
+                      />
                     ) : status === 'error' ? (
-                      <div className="h-full min-h-[120px] flex flex-col items-center justify-center text-danger space-y-2">
+                      <div className="h-full min-h-[120px] flex flex-col items-center justify-center text-danger space-y-3 px-2 py-4">
                         <p>Generation failed.</p>
+                        {jobError && (
+                          <p className="text-xs text-muted text-center max-w-[60ch] leading-relaxed">{jobError}</p>
+                        )}
+                        {manualAnalysis && analysisInfo?.available && (
+                          <div className="w-full max-w-2xl text-left">
+                            <ManualAnalysisPanel
+                              jobId={jobId}
+                              info={analysisInfo}
+                              variant="failed"
+                              onImported={handleManualImported}
+                            />
+                          </div>
+                        )}
                       </div>
                     ) : null
                   )}

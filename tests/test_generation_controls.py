@@ -44,6 +44,12 @@ class TestClipDurationBounds:
         monkeypatch.setenv("CLIP_MAX_SECONDS", "")
         assert clip_selection.clip_duration_bounds() == (15.0, 60.0)
 
+    def test_explicit_environ_overrides_the_process_env(self, monkeypatch):
+        monkeypatch.setenv("CLIP_MIN_SECONDS", "99")
+        monkeypatch.setenv("CLIP_MAX_SECONDS", "120")
+        assert clip_selection.clip_duration_bounds(
+            {"CLIP_MIN_SECONDS": "20", "CLIP_MAX_SECONDS": "30"}) == (20.0, 30.0)
+
 
 def _templates():
     """The prompt template constants, read without importing gemini_worker
