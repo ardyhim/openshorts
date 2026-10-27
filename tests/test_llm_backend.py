@@ -18,7 +18,12 @@ import llm_backend
 def local(monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://llm.test/v1")
     monkeypatch.setenv("LLM_MODEL", "qwen2.5:14b")
-    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    for name in (
+        "LLM_PROVIDER", "LLM_TEMPERATURE", "LLM_TOP_K",
+        "LLM_REPETITION_PENALTY", "LLM_MAX_TOKENS", "LLM_REASONING_EFFORT",
+        "LLM_DISABLE_THINKING", "LLM_CHAT_TEMPLATE_KWARGS",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _serve(handler, monkeypatch):
@@ -53,6 +58,49 @@ def test_base_url_alone_activates_and_describes(local):
 def test_explicit_gemini_provider_wins_over_base_url(local, monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     assert llm_backend.active() is False
+
+
+# --- per-job engine selection ---------------------------------------------
+
+def test_normalize_engine_defaults_and_rejects_unknown():
+    assert llm_backend.normalize_engine(None) == "auto"
+    assert llm_backend.normalize_engine("") == "auto"
+    assert llm_backend.normalize_engine("default") == "auto"
+    assert llm_backend.normalize_engine(" LOCAL ") == "local"
+    with pytest.raises(ValueError):
+        llm_backend.normalize_engine("openai")
+    with pytest.raises(ValueError):
+        llm_backend.normalize_engine(1)
+
+
+def test_apply_engine_forces_local_and_gemini():
+    env = {"LLM_BASE_URL": "http://llm.test/v1", "LLM_MODEL": "lfm3",
+           "LLM_API_KEY": "secret", "LLM_PROVIDER": "gemini"}
+    llm_backend.apply_engine(env, "local")
+    assert env["LLM_PROVIDER"] == "openai"
+    assert env["LLM_BASE_URL"] == "http://llm.test/v1"
+    assert env["LLM_MODEL"] == "lfm3"
+
+    llm_backend.apply_engine(env, "gemini")
+    assert env["LLM_PROVIDER"] == "gemini"
+    assert env["LLM_BASE_URL"] == ""
+    assert env["LLM_MODEL"] == ""
+    assert "LLM_API_KEY" not in env
+
+
+def test_apply_engine_auto_is_a_noop():
+    env = {"LLM_PROVIDER": "openai", "LLM_BASE_URL": "http://llm.test/v1"}
+    assert llm_backend.apply_engine(env, "auto") == {
+        "LLM_PROVIDER": "openai", "LLM_BASE_URL": "http://llm.test/v1"}
+
+
+def test_local_client_ignores_proxy_env(monkeypatch):
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:8089/v1")
+    with llm_backend._client() as client:
+        assert client.trust_env is False
+    monkeypatch.setenv("LLM_BASE_URL", "https://openrouter.ai/api/v1")
+    with llm_backend._client() as client:
+        assert client.trust_env is True
 
 
 # --- generate_json ---------------------------------------------------------
@@ -95,6 +143,20 @@ def test_falls_back_to_json_object_when_schema_mode_is_rejected(local, monkeypat
     assert parsed == {"windows": []}
 
 
+def test_unrelated_400_is_not_treated_as_a_format_rejection(local, monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(400, json={"error": {
+            "message": "invalid format for field 'temperature'"}})
+
+    _serve(handler, monkeypatch)
+    with pytest.raises(RuntimeError, match="temperature"):
+        llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    assert len(calls) == 1
+
+
 def test_code_fenced_json_is_accepted(local, monkeypatch):
     """Small models wrap the object in ```json fences even when told not to."""
     def handler(request):
@@ -104,6 +166,106 @@ def test_code_fenced_json_is_accepted(local, monkeypatch):
     _serve(handler, monkeypatch)
     parsed, _ = llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
     assert parsed == {"windows": []}
+
+
+def test_complete_think_block_is_stripped_before_parsing(local, monkeypatch):
+    answer = json.dumps({"windows": []})
+
+    def handler(request):
+        text = "thinking\nI should score the hook first.\n</think>\n" + answer
+        return httpx.Response(200, json={"choices": [{"message": {"content": text}}], "usage": {}})
+
+    _serve(handler, monkeypatch)
+    parsed, _ = llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    assert parsed == {"windows": []}
+
+
+def test_stray_closing_think_marker_keeps_only_the_answer(local, monkeypatch):
+    answer = json.dumps({"windows": []})
+
+    def handler(request):
+        text = "thoughts with {fake json}\n</think>\n" + answer
+        return httpx.Response(200, json={"choices": [{"message": {"content": text}}], "usage": {}})
+
+    _serve(handler, monkeypatch)
+    parsed, _ = llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    assert parsed == {"windows": []}
+
+
+def test_reasoning_content_is_used_when_content_is_empty(local, monkeypatch):
+    answer = json.dumps({"windows": []})
+
+    def handler(request):
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "", "reasoning_content": answer}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5,
+                      "completion_tokens_details": {"reasoning_tokens": 3}},
+        })
+
+    _serve(handler, monkeypatch)
+    parsed, cost = llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    assert parsed == {"windows": []}
+    assert cost["thinking_tokens"] == 3
+
+
+def test_generation_options_from_env(local, monkeypatch):
+    monkeypatch.setenv("LLM_TEMPERATURE", "0.1")
+    monkeypatch.setenv("LLM_TOP_K", "50")
+    monkeypatch.setenv("LLM_REPETITION_PENALTY", "1.1")
+    monkeypatch.setenv("LLM_MAX_TOKENS", "4096")
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "low")
+    monkeypatch.setenv("LLM_DISABLE_THINKING", "1")
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return _completion({"windows": []})
+
+    _serve(handler, monkeypatch)
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    body = seen["body"]
+    assert body["temperature"] == 0.1
+    assert body["top_k"] == 50
+    # llama.cpp's OpenAI endpoint reads repeat_penalty, not repetition_penalty.
+    assert body["repeat_penalty"] == 1.1
+    assert "repetition_penalty" not in body
+    assert body["max_tokens"] == 4096
+    assert body["reasoning_effort"] == "low"
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_invalid_generation_options_fall_back_to_defaults(local, monkeypatch):
+    monkeypatch.setenv("LLM_TEMPERATURE", "hot")
+    monkeypatch.setenv("LLM_TOP_K", "-1")
+    monkeypatch.setenv("LLM_MAX_TOKENS", "zero")
+    monkeypatch.setenv("LLM_CHAT_TEMPLATE_KWARGS", "not json")
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return _completion({"windows": []})
+
+    _serve(handler, monkeypatch)
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    body = seen["body"]
+    assert body["temperature"] == llm_backend.DEFAULT_TEMPERATURE
+    assert "top_k" not in body
+    assert "max_tokens" not in body
+    assert "chat_template_kwargs" not in body
+
+
+def test_invalid_template_kwargs_still_honor_disable_thinking(local, monkeypatch):
+    monkeypatch.setenv("LLM_CHAT_TEMPLATE_KWARGS", "not json")
+    monkeypatch.setenv("LLM_DISABLE_THINKING", "1")
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return _completion({"windows": []})
+
+    _serve(handler, monkeypatch)
+    llm_backend.generate_json("prompt", gemini_worker.ScoreResponse)
+    assert seen["body"]["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 def test_schema_violation_raises_instead_of_leaking_into_the_pipeline(local, monkeypatch):

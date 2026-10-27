@@ -86,7 +86,7 @@ All generated videos and avatars are saved to a public gallery with SEO pages fo
 
 ### Clip Generator
 - **Viral Moment Detection**: Google Gemini 3.1 Flash-Lite analyzes transcripts and scene boundaries to detect 3-15 high-potential moments
-- **Runs fully local if you want**: point `LLM_BASE_URL` at Ollama, LM Studio, vLLM or any OpenAI-compatible server and the moment picker runs on your own model, no Google key needed (see [Run without a Google key](#6-run-without-a-google-key-local-llm-optional))
+- **Runs fully local if you want**: point `LLM_BASE_URL` at Ollama, LM Studio, vLLM, llama.cpp or any OpenAI-compatible server and the moment picker runs on your own model, no Google key needed (see [Run without a Google key](#6-run-without-a-google-key-local-llm-optional)). The Colab notebook starts **LFM3-1.7B** automatically.
 - **Manual AI selection (self-host/free mode)**: export a timed transcript with candidate windows and a ready-made prompt, ask ChatGPT/Claude/Gemini web/a local model for hook timestamps, then import its JSON. The app validates the answer, snaps cuts to word boundaries, dedupes overlaps and renders without a single Gemini call.
 - **Smart 9:16 Cropping**: AI reframing per scene — TRACK mode (MediaPipe + YOLOv8 face tracking), GENERAL mode (blurred background), SPLIT mode (two speakers stacked, captions on the seam) and SCREENCAST mode (screen over presenter); the layout is picked per video by Gemini or forced from the dashboard
 - **Auto Subtitles**: faster-whisper with word-level timestamps, styled and burned into clips
@@ -315,6 +315,50 @@ know:
   back to the plain face-tracking crop, and a silent video fails with a
   message that says so. Add a key alongside `LLM_BASE_URL` and you get both.
 
+#### LFM3-1.7B through llama.cpp
+
+[LFM3-1.7B](https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF) is a small
+reasoning model with a 256K context and Indonesian support. It is the model
+the Colab notebook starts automatically, and it fits in a free T4.
+
+The current llama.cpp release (`b11936`) predates the LFM3 architecture, so
+load the GGUF with a build from commit `1b4554e` or newer. The notebook builds
+that commit from source; for a manual install, build `llama-server` with
+`-DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON`, start it with the GGUF, then
+point `.env` at it:
+
+```bash
+./llama-server -m LFM3-1.7B-Q4_K_M.gguf -c 16384 \
+  --host 127.0.0.1 --port 8089 --jinja --alias lfm3-1.7b
+```
+
+```bash
+# .env
+LLM_BASE_URL=http://127.0.0.1:8089/v1
+LLM_MODEL=lfm3-1.7b
+LLM_API_KEY=ollama
+LLM_DISABLE_THINKING=1
+LLM_TEMPERATURE=0.1
+LLM_TOP_K=50
+LLM_REPETITION_PENALTY=1.1
+LLM_MAX_TOKENS=4096
+LLM_SCORE_BATCH=3
+```
+
+`LLM_DISABLE_THINKING=1` sends `chat_template_kwargs:
+{"enable_thinking": false}`. If a server rejects that field, the backend still
+strips ` thinking...` blocks and reads `reasoning_content`, but the model is
+slower and can exhaust its output budget before writing JSON. A 1.7B model is
+noticeably weaker than 7-8B at clip selection: the schema validator retries,
+but expect less nuance. LFM3 is text-only, so layout picking and silent videos
+still need Gemini.
+
+**Per-job engine.** The dashboard's advanced options include a **clip analysis
+engine** selector: `auto` (server default), `local` (force the OpenAI-compatible
+server) or `gemini` (force Gemini, when a key is available). API callers can
+send the same value as `analysis_engine` in the JSON or form body. Manual AI
+selection ignores it because it never runs the moment picker.
+
 ## Technical Pipeline
 
 ### Clip Generator
@@ -450,10 +494,19 @@ lives in [`examples/n8n/`](examples/n8n/).
 | `AWS_S3_BUCKET` | Private bucket for clip backup |
 | `AWS_S3_PUBLIC_BUCKET` | Public bucket for gallery/avatars |
 | `MAX_CONCURRENT_JOBS` | Concurrent processing limit (default: 5) |
-| `LLM_BASE_URL` | OpenAI-compatible server for the moment picker (Ollama, vLLM, LM Studio...). Set it and the Gemini key becomes optional |
+| `LLM_BASE_URL` | OpenAI-compatible server for the moment picker (Ollama, vLLM, LM Studio, llama.cpp...). Set it and the Gemini key becomes optional |
 | `LLM_MODEL` | Model name on that server (default `llama3.1:8b`) |
 | `LLM_API_KEY` | Bearer token for that server, if it checks one |
+| `LLM_PROVIDER` | `openai` or `gemini`; usually auto-detected from `LLM_BASE_URL` |
 | `LLM_SCORE_BATCH` | Transcript windows per scoring call (default 3 local, 8 Gemini) |
+| `LLM_TIMEOUT` | Request timeout in seconds (default 600) |
+| `LLM_TEMPERATURE` | Sampling temperature (default 0.2) |
+| `LLM_TOP_K` | Top-k sampling; only sent when set (llama.cpp/Ollama) |
+| `LLM_REPETITION_PENALTY` | Repetition penalty; sent as llama.cpp's `repeat_penalty` when set |
+| `LLM_MAX_TOKENS` | Output cap; only sent when set. LFM3 needs this so thinking cannot run away |
+| `LLM_DISABLE_THINKING` | `1` sends `chat_template_kwargs: {"enable_thinking": false}` (LFM3) |
+| `LLM_CHAT_TEMPLATE_KWARGS` | JSON object forwarded to the chat template; overrides the flag above |
+| `LLM_REASONING_EFFORT` | Forwarded as `reasoning_effort` for servers that support it |
 
 **Client-side (encrypted in localStorage):**
 | Key | Description |

@@ -29,7 +29,14 @@ const readVideoDuration = (file) => new Promise((resolve) => {
     } catch { resolve(null); }
 });
 
-export default function MediaInput({ onProcess, isProcessing, manualAnalysisEnabled = false }) {
+export default function MediaInput({
+    onProcess,
+    isProcessing,
+    manualAnalysisEnabled = false,
+    localLlm = null,
+    geminiAvailable = false,
+    configLoaded = true,
+}) {
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
     // File upload is the primary path; the link is secondary.
     const [mode, setMode] = useState('file'); // 'file' | 'url'
@@ -66,7 +73,22 @@ export default function MediaInput({ onProcess, isProcessing, manualAnalysisEnab
     const [manualAnalysis, setManualAnalysis] = useState(() => {
         try { return localStorage.getItem('os_manual_analysis') === '1'; } catch { return false; }
     });
+    // Per-job moment picker: auto = server default (LFM3 in Colab), local =
+    // force the local OpenAI-compatible server, gemini = force Gemini.
+    const [analysisEngine, setAnalysisEngine] = useState(() => {
+        try { return localStorage.getItem('os_analysis_engine') || 'auto'; } catch { return 'auto'; }
+    });
     const infoRef = useRef(null);
+
+    // A saved choice can outlive the server it pointed at (LFM3 stopped, key
+    // removed). Fall back to auto instead of submitting an engine that 400s.
+    // Wait for /api/config: before it resolves every provider looks absent and
+    // a saved "local" would be wiped on every page load.
+    useEffect(() => {
+        if (!configLoaded) return;
+        if (analysisEngine === 'local' && !localLlm) setAnalysisEngine('auto');
+        if (analysisEngine === 'gemini' && !geminiAvailable) setAnalysisEngine('auto');
+    }, [analysisEngine, localLlm, geminiAvailable, configLoaded]);
 
     // Close the compatibility popover on any outside click.
     useEffect(() => {
@@ -130,12 +152,15 @@ export default function MediaInput({ onProcess, isProcessing, manualAnalysisEnab
             autoHookStyle,
             layout,
             manualAnalysis: manualAnalysisEnabled ? manualAnalysis : false,
+            // Manual selection skips the moment picker entirely.
+            analysisEngine: manualAnalysisEnabled && manualAnalysis ? 'auto' : analysisEngine,
         };
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style_v2', autoHookStyle);
             localStorage.setItem('os_layout', layout);
             localStorage.setItem('os_manual_analysis', manualAnalysis ? '1' : '0');
+            localStorage.setItem('os_analysis_engine', analysisEngine);
         } catch { /* ignore */ }
         if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
@@ -306,7 +331,9 @@ export default function MediaInput({ onProcess, isProcessing, manualAnalysisEnab
                     >
                         <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
                         advanced options
-                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook || (manualAnalysisEnabled && manualAnalysis)) && (
+                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook
+                            || (localLlm && analysisEngine !== 'auto' && !(manualAnalysisEnabled && manualAnalysis))
+                            || (manualAnalysisEnabled && manualAnalysis)) && (
                             <span className="text-brass">·</span>
                         )}
                     </button>
@@ -362,6 +389,28 @@ export default function MediaInput({ onProcess, isProcessing, manualAnalysisEnab
                                     <option value="none">Single crop only</option>
                                 </select>
                             </div>
+                            {localLlm && !(manualAnalysisEnabled && manualAnalysis) && (
+                                <div className="col-span-1 sm:col-span-3 pt-3 sm:pt-1 border-t border-rule">
+                                    <div className="flex flex-wrap items-center justify-between gap-3">
+                                        <span className="text-xs text-ink2">clip analysis engine</span>
+                                        <select
+                                            value={analysisEngine}
+                                            onChange={(e) => setAnalysisEngine(e.target.value)}
+                                            className="input-field !w-auto text-xs py-1.5"
+                                            aria-label="clip analysis engine"
+                                        >
+                                            <option value="auto">Auto (server default)</option>
+                                            <option value="local">Local only ({localLlm.model})</option>
+                                            {geminiAvailable && <option value="gemini">Gemini only</option>}
+                                        </select>
+                                    </div>
+                                    <p className="text-[11px] leading-relaxed text-muted mt-2">
+                                        Local runs the moment picker on this machine (LFM3 in
+                                        Colab) and keeps Gemini out of clip selection. Layout and
+                                        silent-video checks still use Gemini when a key is available.
+                                    </p>
+                                </div>
+                            )}
                             <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
                                 <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
                                     <input

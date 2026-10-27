@@ -30,12 +30,16 @@ Folder ini berisi setup untuk menjalankan **OpenShorts** di Google Colab **tanpa
 | ElevenLabs TTS | **edge-tts** (Microsoft neural voices, tanpa key) |
 | ElevenLabs dubbing | **faster-whisper → Gemini/Google Translate → edge-tts → ffmpeg** |
 | Gemini image — thumbnail | frame asli video + teks (PIL) |
+| Gemini moment picker | **LFM3-1.7B** lokal via llama.cpp (default, tanpa key) |
 | AWS S3 | folder `output/` lokal |
 | Upload-Post | opsional (free tier) atau download manual |
 
+Pemilihan momen otomatis juga bisa berjalan **lokal** dengan **LFM3-1.7B** lewat llama.cpp. Notebook menyalakannya secara default di cell **6b**, jadi Clip Generator tetap bisa otomatis tanpa Gemini key. LFM3 hanya memproses teks; layout picker dan video tanpa suara tetap butuh Gemini.
+
 Yang **masih memakai internet gratis**:
 
-- Hugging Face untuk mengunduh model (RealVisXL, Wav2Lip, Whisper).
+- Hugging Face untuk mengunduh model (RealVisXL, Wav2Lip, Whisper, GGUF LFM3).
+- GitHub untuk mengunduh source llama.cpp saat pertama kali build LFM3.
 - edge-tts untuk suara (Microsoft Edge online).
 - Gemini free tier untuk pemilihan momen/script/title (opsional, tanpa kartu kredit).
 - Google Translate web untuk dubbing tanpa Gemini.
@@ -66,19 +70,19 @@ Kalau ingin memakai notebook dari file lokal: `File` → `Upload notebook`. ZIP 
 
 | Fitur | Tanpa Gemini key | Dengan Gemini key gratis |
 |---|---|---|
-| Clip Generator | Bisa lewat **manual AI selection** (transkrip → AI eksternal → import JSON)¹ | Bisa otomatis |
+| Clip Generator | **LFM3 lokal** otomatis (default) atau **manual AI selection** (transkrip → AI eksternal → import JSON)¹ | Gemini otomatis, atau LFM3 lewat pilihan engine |
 | AI Shorts — analisis/script | Template lokal generik | Analisis produk + script lebih relevan |
 | YouTube Studio — judul/deskripsi | Fallback dari transkrip | Judul/deskripsi lebih kreatif |
 | Thumbnail | Frame + teks | Tetap frame + teks (free mode) |
 | Dubbing | Google Translate web | Terjemahan Gemini (lebih rapi) |
 
-¹ Manual AI selection tidak memanggil Gemini sama sekali. Alternatif otomatis tanpa Google tetap bisa memakai LLM lokal lewat `LLM_BASE_URL` (Ollama/LM Studio/vLLM), tetapi notebook tidak menjalankannya otomatis karena butuh RAM/VRAM tambahan.
+¹ Manual AI selection tidak memanggil Gemini sama sekali. LFM3 juga tidak memanggil Gemini: model 1.7B berjalan di GPU/CPU Colab lewat llama.cpp dan dipakai untuk memilih momen. Kalau LFM3 dimatikan (`LFM3_ENABLED=False`), notebook tidak menjalankan LLM lokal; pakai Gemini atau manual AI selection. Lihat bagian 2.5.
 
 ### 2.3 Jalankan
 
 1. Jalankan cell **1–14** berurutan, atau `Runtime` → `Run all`.
 2. Cell **4** otomatis clone repo GitHub ke `/content/openshorts` — tidak ada file yang perlu di-upload.
-3. Tunggu install + build dashboard (sekitar 3–6 menit, tergantung Colab).
+3. Tunggu install + build dashboard (sekitar 3–6 menit, tergantung Colab). Cell **6b** menambah **5–20 menit** untuk build llama.cpp pertama kali dan mengunduh model LFM3 (~1.1 GB).
 4. Cell **11** menampilkan tombol **Buka OpenShorts**.
 5. Selesai. Video dan thumbnail muncul di folder `output/`.
 
@@ -115,6 +119,36 @@ Catatan:
 - Kalau job otomatis gagal karena kuota tetapi transkrip sudah tersimpan, panel manual tetap muncul di status error.
 - Panel ini hanya ada di self-host/free mode, bukan di cloud berbayar.
 - Setelah import, Gemini tidak dipakai lagi untuk layout atau hook grounding; render memakai pilihan klip dari AI eksternal.
+
+### 2.5 Pemilihan momen otomatis dengan LFM3 (tanpa Gemini)
+
+Cell **2** menyalakan `LFM3_ENABLED=True` secara default. Cell **6b** akan:
+
+1. Mengunduh source llama.cpp pada commit yang sudah mendukung arsitektur LFM3.
+2. Build `llama-server` (CUDA kalau `nvcc` + GPU terdeteksi, kalau tidak CPU).
+3. Mengunduh GGUF `LFM3-1.7B-Q4_K_M.gguf` (~1.1 GB).
+4. Menjalankan server di `127.0.0.1:8089` dan menulis konfigurasi `LLM_*` ke `.env`.
+5. Menjalankan self-test JSON dan menampilkan hasilnya.
+
+**Waktu.** Build pertama 5–20 menit tergantung CPU Colab; build CUDA bisa lebih lama. Download model ~1–3 menit. Selama runtime masih hidup, menjalankan ulang cell 6b memakai build dan model yang sama (cepat).
+
+**Pilihan di cell 2.**
+
+- `LFM3_QUANT`: `Q4_K_M` (default, ~1.1 GB), `Q5_K_M` (~1.26 GB), `Q8_0` (~1.85 GB), `QAD-Q4_0` (~1.05 GB).
+- `LFM3_CONTEXT`: default 16384 token. Naikkan hanya kalau prompt terpotong; KV cache membesar dan T4 bisa kehabisan VRAM.
+- `LFM3_FORCE_CPU`: `True` untuk melewati CUDA dan build CPU (lebih lambat, tetapi lebih tahan kalau CUDA Colab bermasalah).
+
+**Memilih engine di dashboard.** Buka **advanced options** → **clip analysis engine**:
+
+- `Auto (server default)` — memakai LFM3 karena `LLM_BASE_URL` sudah diisi.
+- `Local only (lfm3-1.7b)` — memaksa LFM3; job gagal cepat kalau server LFM3 mati.
+- `Gemini only` — hanya muncul kalau ada Gemini key; memaksa jalur Gemini.
+
+Pilihan ini juga bisa dikirim ke API sebagai `analysis_engine` (`auto`, `local`, `gemini`). Manual AI selection mengabaikannya.
+
+**Kalau LFM3 gagal.** Cell 6b menampilkan build/server log dan menghapus konfigurasi `LLM_*`, jadi dashboard otomatis kembali ke Gemini/manual. Perbaiki error, jalankan ulang cell 6b, lalu **restart server OpenShorts**: cell 13 (stop) → cell 10 (start) — server membaca `.env` saat start.
+
+**Batas.** LFM3 1.7B lebih lemah dari Gemini/7B dalam menilai nuansa hook; validator skema akan retry kalau JSON tidak lengkap. LFM3 **text-only**: layout picker, detektor konten layar, dan video tanpa suara tetap memakai Gemini (atau fallback masing-masing).
 
 ---
 
@@ -166,7 +200,7 @@ OpenShorts bisa memposting ke TikTok, Instagram Reels, dan YouTube Shorts lewat 
 | Wav2Lip | Lip-sync pada foto statis. Kualitas di bawah avatar berbayar, tetapi gratis dan lokal. |
 | Dubbing | Terjemahan per segmen, bukan voice cloning. Panjang audio disesuaikan agar sinkron. |
 | Thumbnail | Komposisi frame asli + teks, bukan gambar AI generatif. Hasilnya konsisten dengan video. |
-| Clip Generator | Otomatis butuh Gemini free tier atau LLM lokal. Tanpa keduanya, pakai **manual AI selection**: unduh transkrip, minta AI eksternal memilih timestamp, lalu import JSON. Tidak ada panggilan Gemini. |
+| Clip Generator | Otomatis dengan **LFM3 lokal** (default notebook) atau Gemini free tier. Tanpa keduanya, pakai **manual AI selection**: unduh transkrip, minta AI eksternal memilih timestamp, lalu import JSON. Tidak ada panggilan Gemini. |
 | YouTube URL | IP datacenter Colab sering ditolak YouTube. Kalau gagal, download video di komputer lalu upload ke dashboard. |
 | Kuota Gemini | Free tier punya batas RPM/RPD. Kalau kena `429`, tunggu atau ganti key. |
 | Publishing | Upload-Post free tier terbatas; tidak ada auto-post gratis tanpa layanan pihak ketiga. |
@@ -181,6 +215,7 @@ OpenShorts bisa memposting ke TikTok, Instagram Reels, dan YouTube Shorts lewat 
 | **RealVisXL V4.0** (SDXL) | CreativeML **OpenRAIL++-M**. Penggunaan komersial diizinkan dengan batasan penggunaan (baca kartu model di Hugging Face). |
 | **edge-tts** | Menggunakan layanan suara Microsoft Edge, bukan API resmi. Gunakan secara wajar; jangan membuat layanan TTS publik berbasis volume besar. |
 | **faster-whisper / Whisper** | Kode MIT; bobot model mengikuti lisensi OpenAI Whisper. |
+| **LFM3-1.7B** (GGUF) | **LFM Open License v1.0** (`lfm1.0`). Model teks 1.7B dari Liquid AI; baca `LICENSE` di repo Hugging Face. Bukan MIT. |
 | **OpenShorts** | MIT (lihat `LICENSE` di root repo). |
 
 > Free mode ini cocok untuk eksperimen pribadi, konten sendiri, dan riset. Kalau hasilnya dipakai untuk klien atau iklan berbayar, periksa ulang lisensi Wav2Lip dan aktifkan fallback non-Wav2Lip.
@@ -204,8 +239,22 @@ OpenShorts bisa memposting ke TikTok, Instagram Reels, dan YouTube Shorts lewat 
 ├── .cache/huggingface/     # cache model SDXL/Whisper
 ├── .env                    # konfigurasi runtime (gitignored)
 ├── server.log              # log uvicorn
-└── .server.pid
+├── .server.pid
+├── .lfm3.pid               # PID llama-server (kalau LFM3 aktif)
+└── .lfm3-model             # quant + context yang sedang dipakai
 ```
+
+LFM3 menyimpan build dan model di luar folder project:
+
+```
+/content/llama.cpp-src/         # source llama.cpp (pinned commit)
+/content/llama.cpp-build/       # hasil build llama-server
+/content/openshorts-models/     # GGUF LFM3 (~1.1 GB untuk Q4_K_M)
+/content/lfm3-server.log        # log llama-server
+/content/llama-build.log        # log build
+```
+
+Semua hilang saat runtime Colab berhenti; cell 6b akan mengunduh dan build ulang di sesi berikutnya. Folder `output/` tetap perlu di-backup ke Drive (cell 14).
 
 ---
 
@@ -231,11 +280,15 @@ Default notebook memakai repo <https://github.com/ardyhim/openshorts.git> dan **
 | `pip install` gagal / `ResolutionImpossible` | Jalankan ulang cell 4 dengan `UPDATE_PROJECT=True` lalu cell 5. `requirements-colab.txt` memakai `py3langid==0.2.2` dan marker NumPy/OpenCV per versi Python. Versi 0.3.0 memaksa NumPy 2 dan bentrok dengan Python <= 3.12. |
 | `TypeError: open() got an unexpected keyword argument 'metadata_errors'` | `av` 19 menghapus argumen yang masih dipakai `faster-whisper 1.2.1`. Jalankan `pip install "av==18.1.0"`, lalu restart server: cell 13 (stop) → cell 10 (start). |
 | `RuntimeError: Library libcublas.so.12 is not found` | Cell 5 memasang `nvidia-cublas-cu12` bila belum ada, dan cell 10 menambahkan folder lib-nya ke `LD_LIBRARY_PATH`. Jalankan ulang cell 5 lalu cell 10. Kalau GPU tetap tidak bisa, Whisper otomatis retry di CPU dan job tetap selesai (lebih lambat). |
-| `CUDA out of memory` | Restart runtime, turunkan `IMAGE_STEPS` ke 12–16, jalankan satu video sekaligus. |
+| `CUDA out of memory` | Restart runtime, turunkan `IMAGE_STEPS` ke 12–16, jalankan satu video sekaligus. Kalau AI Shorts (SDXL) berebut VRAM dengan LFM3, set `LFM3_FORCE_CPU=True` atau `LFM3_ENABLED=False` di cell 2 lalu jalankan ulang cell 6b. |
 | SDXL lambat / download macet | Jalankan cell 8 `PRELOAD_SDXL=True`; cek koneksi dan sisa disk. |
 | Wav2Lip gagal | Pipeline otomatis memakai still image + audio. Cek `server.log`. |
 | Gemini `404` | Jalankan ulang cell 6 dengan key; model dipilih dari daftar yang tersedia. |
 | Gemini `429` | Kuota free tier habis. Tunggu beberapa menit/hari, ganti key, atau centang **manual AI selection** lalu ikuti bagian 2.4 (tanpa Gemini). |
+| LFM3 gagal disiapkan / build llama.cpp gagal | Lihat output cell 6b dan `/content/llama-build.log`. Pastikan `cmake` + `build-essential` terpasang (cell 3). Kalau CUDA bermasalah, set `LFM3_FORCE_CPU=True` di cell 2 lalu jalankan ulang cell 6b. Kalau tetap gagal, set `LFM3_ENABLED=False`; Clip Generator memakai Gemini/manual. |
+| `unknown model architecture: 'lfm3'` | Binary llama.cpp lama (release b11936) belum mendukung LFM3. Cell 6b sudah build dari source commit yang mendukung; jangan mengganti `LFM3_LLAMA_REF` ke release lama. |
+| LFM3 lambat / JSON sering retry | Wajar untuk model 1.7B. Pakai `Q4_K_M`, `LFM3_CONTEXT=16384`, dan satu video sekaligus. Untuk video panjang/nuansa sulit, pilih **Gemini only** atau manual AI selection. |
+| Dashboard masih memakai LFM3 yang sudah mati | Server OpenShorts membaca `.env` hanya saat start. Jalankan cell 13 (stop) lalu cell 10 (start). Kalau LFM3 memang gagal, jalankan ulang cell 6b untuk membersihkan konfigurasi `LLM_*`. |
 | Panel **MANUAL AI** tidak muncul | Pastikan server berjalan dengan `FREE_MODE=1` / `BILLING_ENABLED=0` dan job dijalankan dengan opsi manual. Di cloud berbayar fitur ini memang tidak tersedia. Kalau video tidak punya suara, transkrip tidak bisa dibuat; pakai clip generation otomatis. |
 | Import JSON ditolak | Pastikan `start` < `end`, memakai detik absolut, dan tidak melewati durasi video. Baca pesan validasi di panel. Markdown fence diperbolehkan. |
 | `yt-dlp` gagal | Upload file video langsung, bukan URL YouTube. |
@@ -290,3 +343,9 @@ Di Windows/Linux, `pip install -r colab/requirements-colab.txt` memilih NumPy/Op
 otomatis: Python <= 3.12 memakai NumPy 1.x + OpenCV 4.10, Python 3.13 memakai
 NumPy 2.x + OpenCV 4.12. Pastikan torch/torchvision yang sudah ada kompatibel.
 Cara paling aman tetap Colab (semua dependensi diuji untuk Linux/T4).
+
+LFM3 juga bisa dijalankan manual di luar Colab: build `llama-server` dari
+llama.cpp commit `1b4554e` atau lebih baru, jalankan GGUF LFM3 dengan
+`--jinja --alias lfm3-1.7b --port 8089`, lalu isi `LLM_BASE_URL`,
+`LLM_MODEL=lfm3-1.7b`, dan `LLM_DISABLE_THINKING=1`. Detail ada di README root
+bagian **Run without a Google key**.

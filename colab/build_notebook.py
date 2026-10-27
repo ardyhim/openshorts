@@ -34,6 +34,7 @@ Notebook ini menjalankan **OpenShorts versi free mode** di Google Colab (disaran
 | ElevenLabs TTS | **edge-tts** (Microsoft neural voices) |
 | ElevenLabs dubbing | **faster-whisper + Gemini/Google Translate + edge-tts** |
 | Gemini image thumbnail | frame asli video + teks (PIL) |
+| Gemini moment picker | **LFM3-1.7B** lokal via llama.cpp (default, tanpa key) |
 | AWS S3 | folder `output/` lokal |
 | Upload-Post | opsional (free tier) atau download manual |
 
@@ -41,7 +42,11 @@ Notebook ini menjalankan **OpenShorts versi free mode** di Google Colab (disaran
 
 1. Runtime Colab dengan GPU: `Runtime` → `Change runtime type` → `T4 GPU`.
 2. **Tidak perlu upload file.** Cell 4 otomatis menjalankan `git clone` dari <https://github.com/ardyhim/openshorts.git> ke `/content/openshorts`. Jalankan ulang cell 4 kapan pun untuk mengambil update terbaru; `.env`, `output/`, dan cache tetap aman. Opsi Upload ZIP / Google Drive hanya cadangan offline.
-3. **Opsional tetapi sangat disarankan:** API key Gemini gratis dari [Google AI Studio](https://aistudio.google.com/apikey). Tanpa key, AI Shorts dan YouTube Studio tetap jalan dengan fallback lokal. **Clip Generator** bisa memakai Gemini (atau server LLM lokal via `LLM_BASE_URL`), atau **manual AI selection** tanpa Gemini sama sekali: transkrip diekspor, kamu minta AI apa pun memilih timestamp, lalu import JSON-nya. Lihat bagian **Manual AI selection** di bawah.
+3. **Opsional tetapi sangat disarankan:** API key Gemini gratis dari [Google AI Studio](https://aistudio.google.com/apikey). Tanpa key, AI Shorts dan YouTube Studio tetap jalan dengan fallback lokal. **Clip Generator** otomatis memakai **LFM3 lokal** (cell 6b) atau Gemini; **manual AI selection** juga tersedia tanpa Gemini sama sekali: transkrip diekspor, kamu minta AI apa pun memilih timestamp, lalu import JSON-nya. Lihat bagian **Manual AI selection** di bawah.
+
+**LFM3 (otomatis, tanpa Gemini):**
+
+Cell 2 menyalakan `LFM3_ENABLED=True`. Cell 6b membangun `llama-server` dari source llama.cpp (commit yang sudah mendukung arsitektur LFM3), mengunduh GGUF `LFM3-1.7B-Q4_K_M` (~1.1 GB), menjalankan server di `127.0.0.1:8089`, lalu mengisi `.env`. Build pertama 5–20 menit; sesi berikutnya memakai build yang sama selama runtime hidup. Di dashboard, buka **advanced options → clip analysis engine** dan pilih **Local only (lfm3-1.7b)** kalau ingin memaksa LFM3. LFM3 hanya teks: layout picker dan video tanpa suara tetap butuh Gemini. Kalau build gagal, set `LFM3_ENABLED=False` lalu jalankan ulang cell 6b; Clip Generator memakai Gemini/manual.
 
 **Manual AI selection (tanpa Gemini):**
 
@@ -58,7 +63,7 @@ Notebook ini menjalankan **OpenShorts versi free mode** di Google Colab (disaran
 
 > **Peringatan privasi:** opsi tunnel **Cloudflared** membuat dashboard bisa diakses publik tanpa login. Gunakan **Colab proxy** (default) kalau tidak ingin orang lain membuka GPU dan hasil video Anda.
 
-> **Lisensi model:** **Wav2Lip hanya untuk riset/personal/non-komersial** (lihat README upstream). Untuk konten komersial, set `WAV2LIP_DISABLE=1` di `.env` agar pipeline memakai still image + audio, atau ganti dengan model berlisensi komersial. RealVisXL V4.0 memakai lisensi OpenRAIL++-M.
+> **Lisensi model:** **Wav2Lip hanya untuk riset/personal/non-komersial** (lihat README upstream). Untuk konten komersial, set `WAV2LIP_DISABLE=1` di `.env` agar pipeline memakai still image + audio, atau ganti dengan model berlisensi komersial. RealVisXL V4.0 memakai lisensi OpenRAIL++-M. **LFM3-1.7B** memakai **LFM Open License v1.0** (`lfm1.0`), bukan MIT; baca `LICENSE` di repo Hugging Face.
 
 > **Batas Colab gratis:** sesi bisa terputus kapan saja. Simpan hasil ke Google Drive sebelum runtime mati (ada cell backup di bagian akhir).
 """)
@@ -126,6 +131,15 @@ FREE_IMAGE_MODEL = "SG161222/RealVisXL_V4.0" #@param {type:"string"}
 IMAGE_STEPS = 20 #@param {type:"integer"}
 WHISPER_MODEL = "small" #@param ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
 
+#@markdown ### Pemilihan momen dengan LFM3 (lokal, tanpa API)
+#@markdown LFM3-1.7B berjalan lewat llama.cpp di GPU/CPU Colab. Build pertama
+#@markdown 5–20 menit; sesi berikutnya memakai build yang sama selama runtime hidup.
+#@markdown Pilih **false** untuk tetap memakai Gemini / manual AI selection saja.
+LFM3_ENABLED = True #@param {type:"boolean"}
+LFM3_QUANT = "Q4_K_M" #@param ["Q4_K_M", "Q5_K_M", "Q8_0", "QAD-Q4_0"]
+LFM3_CONTEXT = 16384 #@param {type:"integer"}
+LFM3_FORCE_CPU = False #@param {type:"boolean"}
+
 #@markdown ### Akses dashboard
 PUBLIC_TUNNEL = "Colab proxy (privat)" #@param ["Colab proxy (privat)", "Cloudflared (publik)", "Tidak perlu"]
 
@@ -137,6 +151,10 @@ UPLOAD_POST_API_KEY = (UPLOAD_POST_API_KEY or "").strip()
 GEMINI_MODEL = (GEMINI_MODEL or "auto").strip()
 FREE_IMAGE_MODEL = (FREE_IMAGE_MODEL or "SG161222/RealVisXL_V4.0").strip()
 IMAGE_STEPS = max(8, min(50, int(IMAGE_STEPS)))
+LFM3_QUANT = (LFM3_QUANT or "Q4_K_M").strip()
+if LFM3_QUANT not in ("Q4_K_M", "Q5_K_M", "Q8_0", "QAD-Q4_0"):
+    LFM3_QUANT = "Q4_K_M"
+LFM3_CONTEXT = max(4096, min(32768, int(LFM3_CONTEXT)))
 
 if ASK_GEMINI_KEY and not GEMINI_API_KEY:
     GEMINI_API_KEY = getpass.getpass(
@@ -167,6 +185,8 @@ print("Upload-Post key:", _mask(UPLOAD_POST_API_KEY))
 print("Gemini model   :", GEMINI_MODEL)
 print("Model gambar   :", FREE_IMAGE_MODEL, f"({IMAGE_STEPS} steps)")
 print("Whisper        :", WHISPER_MODEL)
+print("LFM3 lokal     :", "aktif" if LFM3_ENABLED else "nonaktif",
+      f"({LFM3_QUANT}, ctx {LFM3_CONTEXT})" if LFM3_ENABLED else "")
 print("Akses          :", PUBLIC_TUNNEL)
 ''')
 
@@ -182,6 +202,9 @@ APT_PACKAGES = [
     "ffmpeg", "git", "curl", "wget", "unzip", "fontconfig",
     "libgl1", "libglib2.0-0", "libsm6", "libxext6", "libxrender1", "libsndfile1",
     "fonts-liberation", "fonts-noto-core", "fonts-noto-color-emoji", "fonts-dejavu-core",
+    # LFM3 runs through llama.cpp, which the notebook builds from source when
+    # no release asset supports the new architecture yet.
+    "cmake", "build-essential",
 ]
 
 if shutil.which("apt-get"):
@@ -198,6 +221,9 @@ version = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True).s
 print("ffmpeg :", version[0] if version else ffmpeg)
 print("git    :", shutil.which("git") or "TIDAK ADA")
 print("curl   :", shutil.which("curl") or "TIDAK ADA")
+print("cmake  :", shutil.which("cmake") or "TIDAK ADA")
+_nvcc = shutil.which("nvcc") or ("/usr/local/cuda/bin/nvcc" if os.path.exists("/usr/local/cuda/bin/nvcc") else None)
+print("nvcc   :", _nvcc or "TIDAK ADA (LFM3 akan build CPU; tetap jalan, lebih lambat)")
 
 
 def _node_major():
@@ -573,8 +599,9 @@ else:
     print("Gemini key kosong.")
     print("  - AI Shorts, YouTube Studio, thumbnail, dubbing, dan Clip Generator tanpa AI")
     print("    tetap bisa dijalankan dengan fallback lokal.")
-    print("  - Clip Generator (pemilihan momen viral) bisa memakai Gemini, LLM lokal,")
-    print("    atau manual AI selection: transkrip → AI eksternal → import JSON.")
+    print("  - Clip Generator (pemilihan momen viral) otomatis memakai LFM3 lokal dari cell 6b;")
+    print("    Gemini tetap opsional untuk layout/video tanpa suara. Manual AI selection juga")
+    print("    tersedia: transkrip → AI eksternal → import JSON.")
     print("  - Tambahkan key lalu jalankan ulang cell ini untuk memilih model yang tersedia.")
 
 os.environ.update({
@@ -659,6 +686,21 @@ managed = {
     "GEMINI_API_KEY": GEMINI_API_KEY,
     "HF_TOKEN": HF_TOKEN,
     "UPLOAD_POST_API_KEY": UPLOAD_POST_API_KEY,
+    # Cell 6b writes these only after the LFM3 server is confirmed healthy.
+    # Listing them here makes a rerun of this cell drop a stale local-LLM
+    # config instead of leaving the dashboard pointed at a dead port.
+    "LLM_PROVIDER": "",
+    "LLM_BASE_URL": "",
+    "LLM_MODEL": "",
+    "LLM_API_KEY": "",
+    "LLM_TIMEOUT": "",
+    "LLM_TEMPERATURE": "",
+    "LLM_TOP_K": "",
+    "LLM_REPETITION_PENALTY": "",
+    "LLM_MAX_TOKENS": "",
+    "LLM_DISABLE_THINKING": "",
+    "LLM_CHAT_TEMPLATE_KWARGS": "",
+    "LLM_SCORE_BATCH": "",
 }
 
 
@@ -695,6 +737,464 @@ print("GEMINI_MODEL           :", chosen_model, "(thumbnails/SaaS:", thumb_model
 print("FREE_MODE              :", os.environ.get("FREE_MODE"))
 print("WHISPER                :", WHISPER_MODEL, "cuda/float16")
 print("HF_HOME                :", os.environ.get("HF_HOME"))
+''')
+
+code(r'''
+#@title 6b. Siapkan LFM3 lokal (llama.cpp + GGUF)
+#@markdown Build pertama bisa 5–20 menit. Server LFM3 tetap hidup di background;
+#@markdown dashboard otomatis menampilkan pilihan **Local only (LFM3)** di advanced options.
+import glob, json, os, shutil, signal, site, subprocess, time, urllib.error, urllib.request
+from pathlib import Path
+
+PROJECT_DIR = os.path.abspath(PROJECT_DIR)
+
+# The CUDA build links against cuBLAS. Colab may keep it in a pip nvidia
+# package instead of the loader's default path; add every candidate before
+# building/starting llama-server (cell 10 repeats this for the app process).
+cuda_lib_dirs = []
+for _sp in site.getsitepackages():
+    cuda_lib_dirs += glob.glob(os.path.join(_sp, "nvidia", "*", "lib"))
+cuda_lib_dirs += glob.glob("/usr/local/cuda*/lib64")
+cuda_lib_dirs = [d for d in cuda_lib_dirs if os.path.isdir(d)]
+if cuda_lib_dirs:
+    _old_ld = os.environ.get("LD_LIBRARY_PATH", "")
+    os.environ["LD_LIBRARY_PATH"] = ":".join(
+        cuda_lib_dirs + ([_old_ld] if _old_ld else []))
+    print("CUDA libs:", ", ".join(cuda_lib_dirs))
+LFM3_PORT = 8089
+LFM3_ALIAS = "lfm3-1.7b"
+# Commit setelah arsitektur LFM3 masuk ke llama.cpp (PR #31252). Belum ada
+# release binary yang lebih baru dari b11936, jadi build dari source adalah
+# jalur yang paling pasti. Ganti SHA ini kalau ingin versi llama.cpp lain.
+LFM3_LLAMA_REF = "1b4554eff124a8f0033bc09b3f708a5e51cbda15"
+LFM3_MODELS = {
+    "Q4_K_M": ("LFM3-1.7B-Q4_K_M.gguf", 1099627808),
+    "Q5_K_M": ("LFM3-1.7B-Q5_K_M.gguf", 1258663200),
+    "Q8_0": ("LFM3-1.7B-Q8_0.gguf", 1846238496),
+    "QAD-Q4_0": ("LFM3-1.7B-QAD-Q4_0.gguf", 1049615680),
+}
+LFM3_KEYS = (
+    "LLM_PROVIDER", "LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY",
+    "LLM_TIMEOUT", "LLM_TEMPERATURE", "LLM_TOP_K",
+    "LLM_REPETITION_PENALTY", "LLM_MAX_TOKENS", "LLM_DISABLE_THINKING",
+    "LLM_CHAT_TEMPLATE_KWARGS", "LLM_SCORE_BATCH",
+)
+ENV_PATH = Path(PROJECT_DIR) / ".env"
+PID_PATH = Path(PROJECT_DIR) / ".lfm3.pid"
+MODEL_MARKER = Path(PROJECT_DIR) / ".lfm3-model"
+SERVER_LOG = Path("/content/lfm3-server.log")
+BUILD_LOG = Path("/content/llama-build.log")
+SRC_DIR = Path("/content/llama.cpp-src")
+BUILD_DIR = Path("/content/llama.cpp-build")
+MODEL_DIR = Path(PROJECT_DIR).parent / "openshorts-models"
+BUILD_MARKER = BUILD_DIR / ".lfm3-build"
+
+
+def write_env(updates):
+    """Update .env without disturbing keys managed by other cells."""
+    keys = set(updates)
+    lines = []
+    if ENV_PATH.exists():
+        for raw in ENV_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = raw.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key = stripped.split("=", 1)[0].strip()
+                if key in keys:
+                    continue
+            lines.append(raw.rstrip())
+    for key, value in updates.items():
+        if value is not None and str(value) != "":
+            lines.append(f"{key}={value}")
+    ENV_PATH.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    try:
+        ENV_PATH.chmod(0o600)
+    except Exception:
+        pass
+
+
+def clear_llm_env():
+    for key in LFM3_KEYS:
+        os.environ.pop(key, None)
+    write_env({key: "" for key in LFM3_KEYS})
+
+
+def stop_lfm3():
+    if not PID_PATH.exists():
+        return
+    try:
+        pid = int(PID_PATH.read_text().strip())
+    except Exception:
+        PID_PATH.unlink(missing_ok=True)
+        return
+    try:
+        os.killpg(pid, signal.SIGTERM)
+        print(f"Menhentikan LFM3 lama (PID {pid})...")
+    except ProcessLookupError:
+        pass
+    except Exception:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            pass
+    for _ in range(20):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.5)
+    else:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+    PID_PATH.unlink(missing_ok=True)
+
+
+def lfm3_models():
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{LFM3_PORT}/v1/models", timeout=2) as resp:
+            data = json.load(resp)
+        return [m.get("id") for m in data.get("data") or []]
+    except Exception:
+        return []
+
+
+def tail(path, lines=50):
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return "(log belum ada)"
+    return "\n".join(text.splitlines()[-lines:])
+
+
+def download(url, dest, resume=False):
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = ["curl", "-L", "--fail", "--retry", "3", "--retry-delay", "2",
+           "-o", str(dest)]
+    if resume:
+        cmd[2:2] = ["-C", "-"]
+    # Never send the Hugging Face token to GitHub (the llama.cpp tarball uses
+    # this same helper).
+    if HF_TOKEN and "huggingface.co" in url:
+        cmd += ["-H", f"Authorization: Bearer {HF_TOKEN}"]
+    cmd.append(url)
+    print("+", " ".join(cmd[:9]), "...")
+    subprocess.run(cmd, check=True)
+
+
+def valid_tarball(path):
+    """True only when tar can read the archive end to end.
+
+    A download interrupted after the size threshold would otherwise be reused
+    forever and fail extraction on every rerun."""
+    try:
+        result = subprocess.run(
+            ["tar", "-tzf", str(path)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def nvcc_path():
+    if os.path.exists("/usr/local/cuda/bin/nvcc"):
+        return "/usr/local/cuda/bin/nvcc"
+    return shutil.which("nvcc")
+
+
+def gpu_arch():
+    try:
+        import torch
+        if torch.cuda.is_available():
+            major, minor = torch.cuda.get_device_capability(0)
+            return f"{major}{minor}"
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
+            text=True, stderr=subprocess.DEVNULL).strip().splitlines()[0]
+        return out.replace(".", "").strip()
+    except Exception:
+        return ""
+
+
+def build_llama(use_cuda):
+    mode = "cuda" if use_cuda else "cpu"
+    wanted = f"{LFM3_LLAMA_REF}:{mode}"
+    if BUILD_MARKER.exists() and BUILD_MARKER.read_text(
+            encoding="utf-8", errors="replace").strip() == wanted:
+        for candidate in (BUILD_DIR / "bin" / "llama-server",
+                          BUILD_DIR / "bin" / "Release" / "llama-server"):
+            if candidate.exists():
+                return candidate
+    if BUILD_DIR.exists():
+        current = ""
+        try:
+            current = BUILD_MARKER.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            pass
+        if current != wanted:
+            shutil.rmtree(BUILD_DIR, ignore_errors=True)
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    nvcc = nvcc_path()
+    args = [
+        "cmake", "-S", str(SRC_DIR), "-B", str(BUILD_DIR),
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DLLAMA_BUILD_TESTS=OFF",
+        "-DLLAMA_BUILD_EXAMPLES=OFF",
+        "-DLLAMA_BUILD_TOOLS=ON",
+        "-DLLAMA_BUILD_SERVER=ON",
+        f"-DGGML_CUDA={'ON' if use_cuda else 'OFF'}",
+    ]
+    if use_cuda:
+        arch = gpu_arch() or "75"
+        args.append(f"-DCMAKE_CUDA_ARCHITECTURES={arch}")
+        if nvcc:
+            args.append(f"-DCMAKE_CUDA_COMPILER={nvcc}")
+        print(f"Build llama.cpp CUDA (sm_{arch})...")
+    else:
+        print("Build llama.cpp CPU (LFM3 tetap jalan, lebih lambat)...")
+    jobs = max(1, os.cpu_count() or 2)
+    with open(BUILD_LOG, "a", encoding="utf-8") as log:
+        log.write("\n" + "=" * 70 + "\n")
+        log.write(" ".join(args) + "\n")
+        log.flush()
+        subprocess.run(args, stdout=log, stderr=subprocess.STDOUT, check=True)
+        subprocess.run(
+            ["cmake", "--build", str(BUILD_DIR), "--target", "llama-server",
+             "--config", "Release", "-j", str(jobs)],
+            stdout=log, stderr=subprocess.STDOUT, check=True)
+    for candidate in (BUILD_DIR / "bin" / "llama-server",
+                      BUILD_DIR / "bin" / "Release" / "llama-server"):
+        if candidate.exists():
+            candidate.chmod(0o755)
+            BUILD_MARKER.write_text(wanted, encoding="utf-8")
+            return candidate
+    raise RuntimeError("llama-server tidak ditemukan setelah build")
+
+
+def post_chat(extra, use_format=True):
+    body = {
+        "model": LFM3_ALIAS,
+        "messages": [{"role": "user",
+                      "content": 'Reply with exactly {"ok": true} and nothing else.'}],
+        "temperature": 0.1,
+        "max_tokens": 64,
+        "stream": False,
+    }
+    if use_format:
+        body["response_format"] = {"type": "json_object"}
+    body.update(extra)
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{LFM3_PORT}/v1/chat/completions",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json",
+                 "Authorization": "Bearer ollama"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:600]
+        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+    return (data.get("choices") or [{}])[0].get("message") or {}
+
+
+def setup_lfm3():
+    if not LFM3_ENABLED:
+        stop_lfm3()
+        clear_llm_env()
+        print("LFM3 nonaktif: Clip Generator memakai Gemini atau manual AI selection.")
+        return False
+
+    clear_llm_env()
+    running = lfm3_models()
+    # Include the source ref and the CPU preference: changing either must
+    # restart the server, not silently keep the old binary/model.
+    build_pref = "cpu" if LFM3_FORCE_CPU else "auto"
+    wanted_model = (
+        f"{LFM3_LLAMA_REF[:12]}:{LFM3_QUANT}:{LFM3_CONTEXT}:{build_pref}")
+    same_model = False
+    try:
+        same_model = MODEL_MARKER.read_text(encoding="utf-8").strip() == wanted_model
+    except Exception:
+        pass
+    if running and not same_model:
+        print("Server LFM3 yang lama memakai model/context berbeda; restart...")
+        stop_lfm3()
+        running = []
+    if not running:
+        stop_lfm3()
+
+        tar_path = Path(f"/content/llama.cpp-src-{LFM3_LLAMA_REF[:12]}.tar.gz")
+        if (not tar_path.exists() or tar_path.stat().st_size < 1_000_000
+                or not valid_tarball(tar_path)):
+            if tar_path.exists():
+                tar_path.unlink()
+            print("Mengunduh source llama.cpp...")
+            download(
+                f"https://github.com/ggml-org/llama.cpp/archive/{LFM3_LLAMA_REF}.tar.gz",
+                tar_path)
+            if not valid_tarball(tar_path):
+                raise RuntimeError(
+                    f"Source llama.cpp tidak lengkap: {tar_path}. "
+                    "Hapus file itu lalu jalankan ulang cell ini.")
+        source_marker = SRC_DIR / ".lfm3-ref"
+        try:
+            source_ref = source_marker.read_text(encoding="utf-8").strip()
+        except Exception:
+            source_ref = ""
+        if (source_ref != LFM3_LLAMA_REF
+                or not (SRC_DIR / "CMakeLists.txt").exists()
+                or not (SRC_DIR / "src" / "models" / "lfm3.cpp").exists()):
+            print("Mengekstrak source llama.cpp...")
+            shutil.rmtree(SRC_DIR, ignore_errors=True)
+            SRC_DIR.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["tar", "-xzf", str(tar_path), "-C", str(SRC_DIR), "--strip-components=1"],
+                check=True)
+            if not (SRC_DIR / "src" / "models" / "lfm3.cpp").exists():
+                raise RuntimeError(
+                    "Source llama.cpp tidak berisi dukungan LFM3; "
+                    "periksa LFM3_LLAMA_REF di cell 2.")
+            source_marker.write_text(LFM3_LLAMA_REF, encoding="utf-8")
+
+        model_name, model_size = LFM3_MODELS[LFM3_QUANT]
+        model_path = MODEL_DIR / model_name
+        if not model_path.exists() or model_path.stat().st_size != model_size:
+            if model_path.exists() and model_path.stat().st_size > model_size:
+                # A stale/oversized file cannot be resumed; curl would reject
+                # the range request. Start over instead of failing forever.
+                model_path.unlink()
+            print(f"Mengunduh {model_name} (~{model_size / 1e9:.2f} GB)...")
+            download(
+                f"https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/resolve/main/{model_name}",
+                model_path, resume=True)
+        actual = model_path.stat().st_size if model_path.exists() else 0
+        if actual != model_size:
+            raise RuntimeError(
+                f"Ukuran model tidak cocok: {actual} != {model_size}. "
+                f"Hapus {model_path} lalu jalankan ulang cell ini.")
+
+        use_cuda = bool(not LFM3_FORCE_CPU and gpu_arch() and nvcc_path())
+        if not LFM3_FORCE_CPU and gpu_arch() and not nvcc_path():
+            print("nvcc tidak ditemukan; memakai build CPU (lebih lambat).")
+        try:
+            server = build_llama(use_cuda)
+        except Exception:
+            if not use_cuda:
+                raise
+            print("Build CUDA gagal; fallback ke build CPU...")
+            print(tail(BUILD_LOG))
+            shutil.rmtree(BUILD_DIR, ignore_errors=True)
+            server = build_llama(False)
+            use_cuda = False
+
+        # CMake usually bakes a build-tree RUNPATH into the binary, but keep
+        # the shared libs findable even if the build was configured without it.
+        server_lib_dir = str(Path(server).parent)
+        _ld = os.environ.get("LD_LIBRARY_PATH", "")
+        if server_lib_dir not in _ld.split(":"):
+            os.environ["LD_LIBRARY_PATH"] = ":".join(
+                [server_lib_dir] + ([_ld] if _ld else []))
+
+        cmd = [
+            str(server), "-m", str(model_path),
+            "-c", str(LFM3_CONTEXT),
+            "--host", "127.0.0.1", "--port", str(LFM3_PORT),
+            "--jinja", "--alias", LFM3_ALIAS,
+            "--threads", str(max(1, os.cpu_count() or 2)),
+        ]
+        if use_cuda:
+            cmd += ["-ngl", "99"]
+        print("Menjalankan:", " ".join(cmd))
+        SERVER_LOG.write_text("", encoding="utf-8")
+        log_handle = open(SERVER_LOG, "ab", buffering=0)
+        proc = subprocess.Popen(
+            cmd, stdout=log_handle, stderr=subprocess.STDOUT,
+            start_new_session=True, env=os.environ.copy())
+        PID_PATH.write_text(str(proc.pid), encoding="utf-8")
+        deadline = time.time() + 300
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                raise RuntimeError(
+                    f"llama-server berhenti (kode {proc.returncode}).\n"
+                    + tail(SERVER_LOG, 60))
+            if LFM3_ALIAS in lfm3_models():
+                break
+            time.sleep(2)
+        else:
+            raise RuntimeError(
+                "llama-server tidak siap dalam 5 menit.\n" + tail(SERVER_LOG, 60))
+        MODEL_MARKER.write_text(wanted_model, encoding="utf-8")
+
+    # LFM3's template reads enable_thinking. Verify the server accepts the
+    # per-request kwarg before writing LLM_DISABLE_THINKING to .env: a server
+    # that rejects it would fail every moment-picker call.
+    disable_thinking = True
+    try:
+        post_chat({"chat_template_kwargs": {"enable_thinking": False}},
+                  use_format=False)
+    except Exception as exc:
+        detail = str(exc).lower()
+        if "chat_template_kwargs" in detail or "enable_thinking" in detail:
+            print("⚠️ Server menolak chat_template_kwargs; thinking akan di-strip dari output.")
+            disable_thinking = False
+        else:
+            print("⚠️ Uji chat LFM3 gagal (server tetap dipakai):", exc)
+
+    try:
+        extra = ({"chat_template_kwargs": {"enable_thinking": False}}
+                 if disable_thinking else {})
+        message = post_chat(extra, use_format=True)
+        answer = (message.get("content") or "").strip()
+        print("Self-test LFM3:", answer[:180] or "(kosong)")
+    except Exception as exc:
+        print("⚠️ Uji JSON LFM3 gagal (app punya fallback response_format):", exc)
+
+    updates = {
+        "LLM_PROVIDER": "openai",
+        "LLM_BASE_URL": f"http://127.0.0.1:{LFM3_PORT}/v1",
+        "LLM_MODEL": LFM3_ALIAS,
+        "LLM_API_KEY": "ollama",
+        "LLM_TIMEOUT": "900",
+        "LLM_TEMPERATURE": "0.1",
+        "LLM_TOP_K": "50",
+        "LLM_REPETITION_PENALTY": "1.1",
+        "LLM_MAX_TOKENS": "4096",
+        "LLM_SCORE_BATCH": "3",
+    }
+    if disable_thinking:
+        updates["LLM_DISABLE_THINKING"] = "1"
+    else:
+        os.environ.pop("LLM_DISABLE_THINKING", None)
+    write_env(updates)
+    os.environ.update(updates)
+    print("\n✅ LFM3 siap:", updates["LLM_BASE_URL"], "| model:", LFM3_ALIAS)
+    print("   Dashboard → advanced options → clip analysis engine → Local only (LFM3).")
+    print("   LFM3 hanya untuk pemilihan momen; layout/silent-video tetap butuh Gemini.")
+    return True
+
+
+try:
+    LFM3_READY = setup_lfm3()
+except Exception as exc:
+    print("\n❌ LFM3 gagal disiapkan:", exc)
+    print("\n--- build log ---")
+    print(tail(BUILD_LOG))
+    print("\n--- server log ---")
+    print(tail(SERVER_LOG))
+    stop_lfm3()
+    clear_llm_env()
+    LFM3_READY = False
+    print("\nClip Generator tetap bisa memakai Gemini atau manual AI selection.")
+    print("Perbaiki error di atas lalu jalankan ulang cell ini.")
 ''')
 
 code(r'''
@@ -762,7 +1262,7 @@ else:
 
 code(r'''
 #@title 9. Uji cepat instalasi
-import os, subprocess, sys
+import json, os, subprocess, sys, urllib.request
 
 check_code = r"""
 import sys
@@ -800,6 +1300,21 @@ subprocess.run(
     [sys.executable, "-c", "import app; print('app import: OK')"],
     cwd=PROJECT_DIR, env=os.environ.copy(), check=True,
 )
+
+print("\n== Uji LFM3 ==")
+if globals().get("LFM3_READY"):
+    base = os.environ.get("LLM_BASE_URL", "")
+    try:
+        with urllib.request.urlopen(base.rstrip("/") + "/models", timeout=10) as resp:
+            models = json.load(resp).get("data") or []
+        print("LFM3       : OK", [m.get("id") for m in models])
+        print("LLM model  :", os.environ.get("LLM_MODEL"))
+        print("LLM timeout:", os.environ.get("LLM_TIMEOUT"), "detik")
+    except Exception as exc:
+        print("LFM3       : GAGAL", exc)
+        print("Jalankan ulang cell 6b, atau pakai Gemini / manual AI selection.")
+else:
+    print("LFM3       : tidak aktif (Gemini / manual AI selection)")
 ''')
 
 code(r'''
@@ -917,7 +1432,8 @@ if not ready:
 print("Server siap.\n")
 with urllib.request.urlopen("http://127.0.0.1:8000/api/config", timeout=10) as resp:
     cfg = json.load(resp)
-for key in ("billingEnabled", "freeMode", "freeTts", "freeImages", "freeDubbing", "serverGemini", "manualAnalysis"):
+for key in ("billingEnabled", "freeMode", "freeTts", "freeImages", "freeDubbing",
+            "serverGemini", "manualAnalysis", "localLlm"):
     print(f"  {key:15}: {cfg.get(key)}")
 if not cfg.get("freeMode"):
     raise RuntimeError("freeMode tidak aktif. Periksa .env / cell 6.")
@@ -1027,18 +1543,18 @@ else:
 ''')
 
 code(r'''
-#@title 12. Lihat log server (opsional)
+#@title 12. Lihat log server + LFM3 (opsional)
 from pathlib import Path
 
-log_path = Path(PROJECT_DIR) / "server.log"
-if not log_path.exists():
-    print("server.log belum ada.")
-else:
+for log_path in (Path(PROJECT_DIR) / "server.log", Path("/content/lfm3-server.log")):
+    if not log_path.exists():
+        print(f"{log_path} belum ada.")
+        continue
     size = log_path.stat().st_size
     with open(log_path, "rb") as fh:
         fh.seek(max(0, size - 25000))
         text = fh.read().decode("utf-8", errors="replace")
-    print(f"--- {log_path} ({size / 1e6:.2f} MB), 25 KB terakhir ---")
+    print(f"\n--- {log_path} ({size / 1e6:.2f} MB), 25 KB terakhir ---")
     print("\n".join(text.splitlines()[-150:]))
 ''')
 
@@ -1069,6 +1585,7 @@ def stop_pidfile(path, label):
 
 
 stop_pidfile(Path(PROJECT_DIR) / ".server.pid", "Server")
+stop_pidfile(Path(PROJECT_DIR) / ".lfm3.pid", "LFM3")
 stop_pidfile(Path(PROJECT_DIR) / ".cloudflared.pid", "Cloudflared")
 print("Runtime Colab masih hidup. Untuk mematikan sepenuhnya: Runtime > Disconnect and delete runtime.")
 ''')
@@ -1112,11 +1629,15 @@ md(r"""
 | `numpy` bukan 1.x / `mediapipe` gagal import | Jalankan ulang cell 5. MediaPipe 0.10.21 hanya dipasang di Python <= 3.12; di Python 3.13 app otomatis memakai OpenCV Haar dan tidak butuh MediaPipe. Jangan install `mediapipe` versi terbaru: `mp.solutions` sudah dihapus. |
 | `open() got an unexpected keyword argument 'metadata_errors'` | `av` 19 menghapus argumen yang masih dipakai `faster-whisper 1.2.1`. Jalankan `pip install "av==18.1.0"`, lalu restart server: cell 13 (stop) → cell 10 (start). |
 | `RuntimeError: Library libcublas.so.12 is not found` | Cell 5 memasang `nvidia-cublas-cu12` bila belum ada, dan cell 10 menambahkan folder lib-nya ke `LD_LIBRARY_PATH`. Jalankan ulang cell 5 lalu cell 10. Kalau GPU tetap tidak bisa, Whisper otomatis retry di CPU dan job tetap selesai (lebih lambat). |
-| `CUDA out of memory` | Hentikan server (cell 13), restart runtime, turunkan `IMAGE_STEPS` ke 12–16, dan jangan jalankan dua video bersamaan. |
+| `CUDA out of memory` | Hentikan server (cell 13), restart runtime, turunkan `IMAGE_STEPS` ke 12–16, dan jangan jalankan dua video bersamaan. Kalau AI Shorts (SDXL) berebut VRAM dengan LFM3, set `LFM3_FORCE_CPU=True` atau `LFM3_ENABLED=False` di cell 2 lalu jalankan ulang cell 6b. |
 | Model SDXL terasa lambat / tidak muncul | Unduh dulu lewat cell 8 (`PRELOAD_SDXL=True`). Generation pertama memakan 5–15 menit. |
 | `Wav2Lip` gagal | Normal: pipeline otomatis memakai still image + audio. Cek log; kualitas lipsync butuh checkpoint ~520 MB. |
 | Gemini `404 model not found` | Jalankan ulang cell 6 dengan key terisi; cell itu memilih model flash yang benar-benar tersedia untuk key Anda. |
 | Gemini `429` / `quota exceeded` | Kuota gratis habis. Tunggu beberapa menit/hari, ganti key, atau centang **manual AI selection** di advanced options lalu ikuti langkah di bagian atas notebook (tanpa Gemini). |
+| LFM3 gagal disiapkan / build llama.cpp gagal | Lihat output cell 6b dan `/content/llama-build.log`. Pastikan `cmake` + `build-essential` terpasang (cell 3). Kalau CUDA bermasalah, set `LFM3_FORCE_CPU=True` di cell 2 lalu jalankan ulang cell 6b. Kalau tetap gagal, set `LFM3_ENABLED=False`; Clip Generator memakai Gemini/manual. |
+| `unknown model architecture: 'lfm3'` | Binary llama.cpp lama (release b11936) belum mendukung LFM3. Cell 6b sudah build dari source commit yang mendukung; jangan mengganti `LFM3_LLAMA_REF` ke release lama. |
+| LFM3 lambat / JSON sering retry | Wajar untuk model 1.7B. Pakai `Q4_K_M`, `LFM3_CONTEXT=16384`, dan satu video sekaligus. Untuk video panjang/nuansa sulit, pilih **Gemini only** atau manual AI selection. |
+| Dashboard masih memakai LFM3 yang sudah mati | Server OpenShorts membaca `.env` hanya saat start. Jalankan cell 13 (stop) lalu cell 10 (start). Kalau LFM3 memang gagal, jalankan ulang cell 6b untuk membersihkan konfigurasi `LLM_*`. |
 | Panel **MANUAL AI** tidak muncul | Pastikan server memakai `FREE_MODE=1`/`BILLING_ENABLED=0` dan job dijalankan dengan opsi manual. Video tanpa suara tidak punya transkrip untuk diekspor. |
 | Import JSON ditolak | `start` harus lebih kecil dari `end`, memakai detik absolut, dan tidak melewati durasi video. Markdown fence diperbolehkan; baca pesan validasi di panel. |
 | `yt-dlp` gagal download YouTube | Colab memakai IP datacenter yang sering diblokir YouTube. Download video di komputer lalu upload file ke dashboard. |
@@ -1127,7 +1648,7 @@ md(r"""
 
 **Catatan kualitas**
 
-- **Clip Generator** bisa memakai Gemini (gratis) atau server LLM lokal (`LLM_BASE_URL`, misalnya Ollama). Tanpa keduanya, aktifkan **manual AI selection**: transkrip diekspor, AI eksternal memilih timestamp, lalu JSON-nya di-import. Tidak ada panggilan Gemini pada alur ini.
+- **Clip Generator** otomatis memakai **LFM3 lokal** (cell 6b) atau Gemini. Tanpa keduanya, aktifkan **manual AI selection**: transkrip diekspor, AI eksternal memilih timestamp, lalu JSON-nya di-import. Tidak ada panggilan Gemini pada alur ini. LFM3 1.7B lebih lemah dari Gemini/7B dan hanya memproses teks; layout/video tanpa suara tetap butuh Gemini.
 - **AI Shorts** tanpa Gemini memakai template analisis/script lokal; hasilnya lebih generik.
 - **Thumbnail** free mode dibuat dari frame asli + teks, bukan gambar generatif.
 - **Dubbing** free mode memakai terjemahan per segmen + edge-tts; bukan voice cloning seperti ElevenLabs.

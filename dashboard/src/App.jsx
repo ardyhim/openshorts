@@ -270,7 +270,7 @@ const pollJob = async (jobId) => {
 
 function App() {
   // Cloud auth/billing session (inert when billing is disabled).
-  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, freeMode, serverGemini, serverUploadPost, manualAnalysis } = useAuth();
+  const { billingEnabled, isManaged, isSignedIn, me, plan, refreshMe, jobRetentionSeconds, localLlm, freeMode, serverGemini, serverUploadPost, manualAnalysis, loading: configLoading } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showTopUp, setShowTopUp] = useState(false);
   // Free plan: "want the watermark off?" once per job, when the clips land.
@@ -1152,6 +1152,10 @@ function App() {
         // Manual AI selection: main.py stops after transcription so the
         // dashboard can export the transcript and import an external answer.
         analysis_mode: data.manualAnalysis ? 'manual' : null,
+        // Per-job moment picker. 'auto' is the server default, so only a
+        // deliberate choice travels (keeps old API/dashboard requests intact).
+        analysis_engine: data.analysisEngine && data.analysisEngine !== 'auto'
+          ? data.analysisEngine : null,
       };
 
       if (data.type === 'url') {
@@ -2200,7 +2204,14 @@ function App() {
                   )}
                 </div>
 
-                <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} manualAnalysisEnabled={manualAnalysis} />
+                <MediaInput
+                  onProcess={handleProcess}
+                  isProcessing={status === 'processing'}
+                  manualAnalysisEnabled={manualAnalysis}
+                  localLlm={localLlm}
+                  geminiAvailable={!!apiKey || !!serverGemini}
+                  configLoaded={!configLoading}
+                />
 
                 <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-xs sm:text-sm">
                   <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>

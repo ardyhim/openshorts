@@ -1412,7 +1412,7 @@ def _install_drain_signal_handler():
 def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, watermark,
                            webhook_url=None, webhook_secret=None, base_url=None,
                            partial=None, source_cap_minutes=None, skip_statics=False,
-                           via_api_key=False):
+                           via_api_key=False, analysis_engine="auto"):
     try:
         path = os.path.join(OUTPUT_DIR, job_id, _RESUME_FILE)
         with open(path, "w") as f:
@@ -1437,6 +1437,9 @@ def _write_resume_manifest(job_id, cmd, priority, user_id, reservation_id, water
                 # The probe's "statics bot-checked for this video" verdict.
                 "skip_statics": bool(skip_statics),
                 "via_api_key": bool(via_api_key),
+                # Per-job moment-picker engine, so a resumed job does not
+                # silently switch to the server default after a redeploy.
+                "analysis_engine": analysis_engine,
             }, f)
     except Exception as e:
         print(f"⚠️ Could not write resume manifest for {job_id}: {e}")
@@ -1513,6 +1516,20 @@ def _resume_interrupted_jobs() -> set:
         # (cloud) jobs get the server key; self-host falls back to its env key.
         env = child_env()
         try:
+            resumed_engine = llm_backend.normalize_engine(m.get("analysis_engine"))
+        except ValueError:
+            resumed_engine = "auto"
+        llm_backend.apply_engine(env, resumed_engine)
+        # The command is the only durable record of this route: a resumed
+        # prepare-manual run must still pause after transcription, and a
+        # render from an imported --clips-file must not start spending
+        # Gemini quota on layout/hook grounding.
+        cmd_list = m.get("cmd") or []
+        resumed_manual = '--prepare-manual' in cmd_list
+        if resumed_manual or '--clips-file' in cmd_list:
+            env.pop("GEMINI_API_KEY", None)
+            env["HOOK_GROUNDING"] = "0"
+        try:
             from cloud import proxy_ledger as _pl
             if BILLING_ENABLED and _pl.budget_exceeded_sync():
                 env.pop("PROXY_URL", None)  # daily paid-proxy budget hit
@@ -1554,9 +1571,8 @@ def _resume_interrupted_jobs() -> set:
             'cmd': m.get("cmd"),
             'env': env,
             'output_dir': job_path,
-            # The command is the only durable record of this route; a resumed
-            # prepare-manual run must still pause after transcription.
-            'manual_analysis': '--prepare-manual' in (m.get("cmd") or []),
+            'manual_analysis': resumed_manual,
+            'analysis_engine': resumed_engine,
             'user_id': None if user_id is None else user_id,
             'reservation_id': reservation_id,
             'watermark': bool(m.get("watermark")),
@@ -3187,6 +3203,7 @@ async def process_endpoint(
     upload_id: Optional[str] = Form(None),
     max_minutes: Optional[str] = Form(None),
     analysis_mode: Optional[str] = Form(None),
+    analysis_engine: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
 
@@ -3217,6 +3234,7 @@ async def process_endpoint(
         upload_id = body.get("upload_id")
         max_minutes = body.get("max_minutes")
         analysis_mode = body.get("analysis_mode")
+        analysis_engine = body.get("analysis_engine")
 
     # Manual selection pauses after transcription so the user can pick clips
     # with an external AI. It makes no Gemini call, so it must be resolved
@@ -3231,12 +3249,29 @@ async def process_endpoint(
             status_code=403,
             detail="Manual transcript analysis is available in self-host/free "
                    "mode only.")
-    if not manual_analysis and not api_key and not (llm_backend.active() and not BILLING_ENABLED):
-        # Self-host with an OpenAI-compatible server configured needs no
-        # Google key for the core pipeline: the moment picker runs there and
-        # the frame-based stages degrade on their own (layout_picker returns
-        # "none", silent videos fail with a message that says why).
-        raise gemini_missing_error()
+    try:
+        analysis_engine = llm_backend.normalize_engine(analysis_engine)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Manual selection never runs the moment picker, so the engine choice is
+    # irrelevant (and must not be allowed to demand a Gemini key).
+    if manual_analysis:
+        analysis_engine = "auto"
+    local_llm = bool(llm_backend.active() and not BILLING_ENABLED)
+    if not manual_analysis:
+        if analysis_engine == "local" and not local_llm:
+            raise HTTPException(
+                status_code=400,
+                detail="Local LLM is not available on this server. "
+                       "Start it with LLM_BASE_URL (LFM3 in Colab) or choose Gemini.")
+        if analysis_engine == "gemini" and not api_key:
+            raise gemini_missing_error()
+        if analysis_engine == "auto" and not api_key and not local_llm:
+            # Self-host with an OpenAI-compatible server configured needs no
+            # Google key for the core pipeline: the moment picker runs there
+            # and the frame-based stages degrade on their own (layout_picker
+            # returns "none", silent videos fail with a message that says why).
+            raise gemini_missing_error()
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -3317,6 +3352,12 @@ async def process_endpoint(
     # probe above already gets this right.
     cmd = [sys.executable, "-u", "main.py"] # -u for unbuffered
     env = child_env()
+    # Per-job moment-picker engine: auto keeps the server's LLM_* settings,
+    # gemini blanks the local endpoint, local forces the OpenAI-compatible
+    # server. The override is inherited by the main.py subprocess.
+    llm_backend.apply_engine(env, analysis_engine)
+    if analysis_engine != "auto":
+        print(f"[analysis-engine] job={job_id} engine={analysis_engine}")
     if not paid_allowed:
         # Daily paid-proxy budget hit: this job runs on the free routes only.
         env.pop("PROXY_URL", None)
@@ -3542,6 +3583,7 @@ async def process_endpoint(
         # falls back to searching the job directory.
         'source_path': input_path,
         'manual_analysis': manual_analysis,
+        'analysis_engine': analysis_engine,
         'priority': priority,
         'attestation': attestation,
         'user_id': user_id,
@@ -3575,7 +3617,8 @@ async def process_endpoint(
                            webhook_url=webhook_url, webhook_secret=webhook_secret,
                            base_url=api_base, partial=partial,
                            source_cap_minutes=source_cap, skip_statics=skip_statics,
-                           via_api_key=jobs[job_id]['via_api_key'])
+                           via_api_key=jobs[job_id]['via_api_key'],
+                           analysis_engine=analysis_engine)
 
     _enqueue_job(job_id, priority)
 
@@ -3996,7 +4039,8 @@ async def import_job_analysis(job_id: str, request: Request):
         webhook_secret=job.get('webhook_secret'),
         base_url=job.get('base_url') or str(request.base_url).rstrip('/'),
         partial=None, source_cap_minutes=None, skip_statics=False,
-        via_api_key=bool(job.get('via_api_key')))
+        via_api_key=bool(job.get('via_api_key')),
+        analysis_engine=job.get('analysis_engine') or 'auto')
     _enqueue_job(job_id, priority)
     print(f"[manual-analysis] job={job_id} imported {len(parsed['clips'])} "
           f"clip(s); source={'file' if source_path else 'url'}")
