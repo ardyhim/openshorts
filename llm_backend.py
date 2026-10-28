@@ -6,10 +6,12 @@ Ollama, LM Studio, vLLM, llama.cpp's server, LocalAI and OpenRouter all speak
 ``main.get_viral_clips`` go here instead of Gemini, so a self-hosted install
 can run the whole pipeline without a Google key.
 
-The Colab notebook uses this path to run **LiquidAI LFM3-1.7B** through
-llama.cpp (``LLM_MODEL=lfm3-1.7b``). LFM3 is a reasoning model: its chat
-template may wrap the answer in  thinking...</think>, so this module strips those
-blocks and also accepts servers that return the answer in
+The Colab notebook uses this path to run **LiquidAI LFM3-1.7B** through the
+bundled Transformers server in ``colab/lfm3_server.py``
+(``LLM_MODEL=lfm3-1.7b``); any llama.cpp/Ollama/vLLM server works too. LFM3 is
+a reasoning model: its chat template may wrap the answer in  thinking...</think>,
+so this module strips those blocks and also accepts servers that return the
+answer in
 ``reasoning_content``. Optional ``LLM_TEMPERATURE``, ``LLM_TOP_K``,
 ``LLM_REPETITION_PENALTY`` and ``LLM_MAX_TOKENS`` tune the request; they are
 only sent when set, so generic OpenAI-compatible servers keep working.
@@ -144,7 +146,7 @@ def _headers() -> dict:
 def _client(**kwargs) -> httpx.Client:
     """Factory so tests can swap in ``httpx.MockTransport``."""
     # A proxy configured for the container must not swallow calls to a model
-    # server on the same machine (the Colab notebook runs llama.cpp on
+    # server on the same machine (the Colab notebook runs lfm3_server.py on
     # 127.0.0.1); httpx would otherwise honour HTTP_PROXY for it.
     if base_url().startswith(("http://127.0.0.1", "http://localhost")):
         kwargs.setdefault("trust_env", False)
@@ -207,8 +209,9 @@ def _chat_template_kwargs() -> Optional[dict]:
         # Invalid or non-object JSON: fall through to the simple flag instead
         # of silently leaving a reasoning model in thinking mode.
     if _truthy(os.environ.get("LLM_DISABLE_THINKING")):
-        # LFM3's chat template reads this variable; llama.cpp forwards it
-        # verbatim. Other servers only see it when this flag is set.
+        # LFM3's chat template reads this variable; the bundled server and
+        # llama.cpp forward it verbatim. Other servers only see it when this
+        # flag is set.
         return {"enable_thinking": False}
     return None
 
@@ -220,7 +223,7 @@ def _generation_options() -> dict:
     ``top_k`` and ``repeat_penalty`` are llama.cpp extensions that a strict
     OpenAI-compatible server may reject. ``LLM_REPETITION_PENALTY`` is sent as
     ``repeat_penalty`` because that is the field llama.cpp's OpenAI endpoint
-    reads; a ``repetition_penalty`` field is ignored there.
+    reads; the bundled LFM3 server accepts both spellings.
     """
     options = {"temperature": _env_float("LLM_TEMPERATURE", DEFAULT_TEMPERATURE)}
     top_k = _env_int("LLM_TOP_K")

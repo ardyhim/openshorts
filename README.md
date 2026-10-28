@@ -315,22 +315,34 @@ know:
   back to the plain face-tracking crop, and a silent video fails with a
   message that says so. Add a key alongside `LLM_BASE_URL` and you get both.
 
-#### LFM3-1.7B through llama.cpp
+#### LFM3-1.7B through Transformers
 
-[LFM3-1.7B](https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF) is a small
-reasoning model with a 256K context and Indonesian support. It is the model
-the Colab notebook starts automatically, and it fits in a free T4.
+[LFM3-1.7B](https://huggingface.co/LiquidAI/LFM3-1.7B) is a small reasoning
+model with a 256K context and Indonesian support. It is the model the Colab
+notebook starts automatically, and it fits in a free T4.
 
-The current llama.cpp release (`b11936`) predates the LFM3 architecture, so
-load the GGUF with a build from commit `1b4554e` or newer. The notebook builds
-that commit from source; for a manual install, build `llama-server` with
-`-DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON`, start it with the GGUF, then
-point `.env` at it:
+The checkpoint uses remote code (`trust_remote_code=True`) and needs a recent
+Transformers 5.x (`use_kernel_func_from_hub_with_fallback`); `5.21.0` is the
+tested version. The main app pins `transformers==4.57.1` for diffusers/SDXL,
+so run LFM3 in a separate venv that reuses the host's torch:
 
 ```bash
-./llama-server -m LFM3-1.7B-Q4_K_M.gguf -c 16384 \
-  --host 127.0.0.1 --port 8089 --jinja --alias lfm3-1.7b
+python -m venv --system-site-packages .venv-lfm3
+.venv-lfm3/bin/pip install "transformers==5.21.0" accelerate
+.venv-lfm3/bin/python colab/lfm3_server.py \
+  --model LiquidAI/LFM3-1.7B \
+  --served-model-name lfm3-1.7b \
+  --host 127.0.0.1 --port 8089
 ```
+
+On Windows use `.venv-lfm3\Scripts\python.exe` instead. The server downloads
+the checkpoint on first start, loads it with
+`AutoModelForCausalLM.from_pretrained(..., trust_remote_code=True,
+device_map="auto")`, and serves `/v1/models` plus `/v1/chat/completions` with
+the standard library. It uses fp16 on T4/P100 and bf16 on Ampere or newer.
+`--triton auto` disables LFM3's optional Triton conv kernels before Ampere and
+uses the PyTorch fallback; pass `--triton on` to force them. Add `--device cpu`
+for a CPU-only box (fp32, much slower). Then point `.env` at it:
 
 ```bash
 # .env
@@ -343,6 +355,7 @@ LLM_TOP_K=50
 LLM_REPETITION_PENALTY=1.1
 LLM_MAX_TOKENS=4096
 LLM_SCORE_BATCH=3
+LLM_TIMEOUT=1800
 ```
 
 `LLM_DISABLE_THINKING=1` sends `chat_template_kwargs:
