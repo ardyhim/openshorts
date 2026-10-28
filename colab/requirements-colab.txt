@@ -45,7 +45,7 @@ deep-translator==1.11.4
 
 # --- Local SDXL image generation (RealVisXL V4.0) ---
 # The app keeps transformers 4.57.1 because diffusers 0.36 expects it. LFM3
-# needs transformers 5.21.0 (its remote code uses the v5 APIs), so cell 6b
+# needs transformers 5.21.0 (its remote code uses the v5 APIs), so cell 5
 # installs that version in an isolated /content/lfm3-venv with
 # --system-site-packages and reuses this torch. Do not bump this pin for LFM3.
 diffusers==0.36.0

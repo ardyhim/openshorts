@@ -10,7 +10,7 @@ Folder ini berisi setup untuk menjalankan **OpenShorts** di Google Colab **tanpa
 |---|---|
 | `OpenShorts_Free_Colab.ipynb` | Notebook utama: cek GPU, install, build dashboard, jalankan server, buka URL. |
 | `requirements-colab.txt` | Dependensi Python yang aman untuk Colab (tanpa mengganti torch bawaan). |
-| `openshorts-free-colab.zip` | Cadangan offline; tidak dipakai secara default karena notebook memakai Git clone. |
+| `openshorts-free-colab.zip` | Arsip offline lama; notebook sekarang selalu memakai Git clone. |
 | `build_zip.py` | Membuat ulang ZIP dari repo: `python colab/build_zip.py`. |
 | `build_notebook.py` | Generator notebook (untuk maintainer): `python colab/build_notebook.py`. |
 
@@ -34,7 +34,7 @@ Folder ini berisi setup untuk menjalankan **OpenShorts** di Google Colab **tanpa
 | AWS S3 | folder `output/` lokal |
 | Upload-Post | opsional (free tier) atau download manual |
 
-Pemilihan momen otomatis juga bisa berjalan **lokal** dengan **LFM3-1.7B** yang dimuat langsung lewat `transformers` (`AutoModelForCausalLM` + `trust_remote_code=True`). Notebook menyalakannya secara default di cell **6b**, jadi Clip Generator tetap bisa otomatis tanpa Gemini key. LFM3 hanya memproses teks; layout picker dan video tanpa suara tetap butuh Gemini.
+Pemilihan momen otomatis juga bisa berjalan **lokal** dengan **LFM3-1.7B** yang dimuat langsung lewat `transformers` (`AutoModelForCausalLM` + `trust_remote_code=True`). Notebook menyalakannya secara default di cell **5**, jadi Clip Generator tetap bisa otomatis tanpa Gemini key. LFM3 hanya memproses teks; layout picker dan video tanpa suara tetap butuh Gemini.
 
 Yang **masih memakai internet gratis**:
 
@@ -55,16 +55,16 @@ Tidak perlu download repo atau upload ZIP.
 
 1. Buka **langsung** notebook ini di Colab: <https://colab.research.google.com/github/ardyhim/openshorts/blob/main/colab/OpenShorts_Free_Colab.ipynb>
 2. `Runtime` → `Change runtime type` → **T4 GPU** → `Save`.
-3. Cell 4 otomatis menjalankan `git clone` dari <https://github.com/ardyhim/openshorts.git> ke `/content/openshorts`.
+3. cell 2 otomatis menjalankan `git clone` dari <https://github.com/ardyhim/openshorts.git> ke `/content/openshorts`.
 
-Kalau ingin memakai notebook dari file lokal: `File` → `Upload notebook`. ZIP project tetap tersedia sebagai cadangan offline, tetapi tidak diperlukan.
+Kalau ingin memakai notebook dari file lokal: `File` → `Upload notebook`. Notebook selalu memakai Git clone; file ZIP tidak dipakai.
 
 ### 2.2 API key Gemini (gratis, opsional tetapi disarankan)
 
 1. Buka <https://aistudio.google.com/apikey>.
 2. Login dengan akun Google, klik **Create API key**. Tidak perlu kartu kredit.
 3. Copy key (`AIza...`).
-4. Di notebook, cell **2** punya kolom `GEMINI_API_KEY`; paste di sana. Kalau dikosongkan, notebook akan meminta lewat prompt (tekan Enter untuk melewati).
+4. Di notebook, cell **1** punya kolom `GEMINI_API_KEY`; paste di sana. Kalau dikosongkan, notebook akan meminta lewat prompt (tekan Enter untuk melewati).
 
 **Kapan key dibutuhkan?**
 
@@ -80,15 +80,15 @@ Kalau ingin memakai notebook dari file lokal: `File` → `Upload notebook`. ZIP 
 
 ### 2.3 Jalankan
 
-1. Jalankan cell **1–14** berurutan, atau `Runtime` → `Run all`.
-2. Cell **4** otomatis clone repo GitHub ke `/content/openshorts` — tidak ada file yang perlu di-upload.
-3. Tunggu install + build dashboard (sekitar 3–6 menit, tergantung Colab). Cell **6b** menambah **1–3 menit** untuk mengunduh model LFM3 (~3.4 GB) dan memuatnya dengan Transformers.
-4. Cell **11** menampilkan tombol **Buka OpenShorts**.
+1. Jalankan cell **1–7** berurutan, atau `Runtime` → `Run all`.
+2. Cell **2** otomatis clone repo GitHub ke `/content/openshorts` — tidak ada file yang perlu di-upload.
+3. Tunggu install + build dashboard (sekitar 3–6 menit, tergantung Colab). Cell **5** menambah **1–3 menit** untuk mengunduh model LFM3 (~3.4 GB) dan memuatnya dengan Transformers.
+4. Cell **6** menampilkan tombol **Buka OpenShorts**.
 5. Selesai. Video dan thumbnail muncul di folder `output/`.
 
-> Kalau menjalankan ulang cell **4**, `UPDATE_PROJECT=True` akan mengambil versi terbaru dari GitHub. File `.env`, `output/`, dan cache model tetap aman karena tidak dilacak git.
+> Kalau menjalankan ulang cell **2**, `UPDATE_PROJECT=True` akan mengambil versi terbaru dari GitHub. File `.env`, `output/`, dan cache model tetap aman karena tidak dilacak git.
 
-> Pertama kali memakai AI Shorts, model SDXL (~7 GB) dan Wav2Lip (~520 MB) diunduh otomatis. Ini bisa memakan 5–15 menit. Untuk mengunduh lebih awal, jalankan cell **8** dengan `PRELOAD_SDXL=True`.
+> Pertama kali memakai AI Shorts, model SDXL (~7 GB) dan Wav2Lip (~520 MB) diunduh otomatis. Ini bisa memakan 5–15 menit. Model diunduh saat fitur pertama kali dipakai; tidak ada cell preload terpisah.
 
 ### 2.4 Pilih momen tanpa Gemini (manual AI selection)
 
@@ -122,17 +122,17 @@ Catatan:
 
 ### 2.5 Pemilihan momen otomatis dengan LFM3 (tanpa Gemini)
 
-Cell **2** menyalakan `LFM3_ENABLED=True` secara default. Cell **6b** akan:
+Cell **1** menyalakan `LFM3_ENABLED=True` secara default. Cell **5** akan:
 
-1. Membuat venv terpisah `/content/lfm3-venv` berisi `transformers==5.21.0` + `accelerate==1.15.0` (memakai torch CUDA bawaan Colab; app utama tetap memakai transformers 4.57.1 untuk SDXL). Kalau `python -m venv` gagal (mis. image Colab tanpa `ensurepip`), cell otomatis mencoba `venv --without-pip`, `virtualenv`, lalu `uv` dan menampilkan pesan error aslinya.
+1. Membuat venv terpisah `/content/lfm3-venv` berisi `transformers==5.21.0` + `accelerate==1.15.0` (memakai torch CUDA bawaan Colab; app utama tetap memakai transformers 4.57.1 untuk SDXL). Kalau `python -m venv` gagal (mis. image Colab tanpa `ensurepip`), cell otomatis mencoba `venv --without-pip`, `virtualenv`, lalu `uv` dan menampilkan pesan error asli.
 2. Mengunduh checkpoint `LiquidAI/LFM3-1.7B` (~3.4 GB, BF16) ke `/content/openshorts-models/LFM3-1.7B`.
 3. Menjalankan `colab/lfm3_server.py`, yang memuat model dengan `AutoModelForCausalLM.from_pretrained(..., trust_remote_code=True, device_map="auto")` dan menyajikan endpoint OpenAI-compatible di `127.0.0.1:8089`.
 4. Menulis konfigurasi `LLM_*` ke `.env`.
 5. Menjalankan self-test chat + JSON dan menampilkan hasilnya.
 
-**Waktu.** Unduhan pertama ~3.4 GB (biasanya 1–3 menit di Colab) dan load model beberapa puluh detik. Selama runtime masih hidup, menjalankan ulang cell 6b memakai venv + model yang sama (cepat).
+**Waktu.** Unduhan pertama ~3.4 GB (biasanya 1–3 menit di Colab) dan load model beberapa puluh detik. Selama runtime masih hidup, menjalankan ulang cell 5 memakai venv + model yang sama (cepat).
 
-**Pilihan di cell 2.**
+**Pilihan di cell 1.**
 
 - `LFM3_CONTEXT`: default 16384 token. Naikkan hanya kalau prompt terpotong; KV cache membesar dan T4 bisa kehabisan VRAM.
 - `LFM3_FORCE_CPU`: `True` untuk memuat model di CPU (fp32, lebih lambat, tetapi lebih tahan kalau CUDA Colab bermasalah).
@@ -145,7 +145,7 @@ Cell **2** menyalakan `LFM3_ENABLED=True` secara default. Cell **6b** akan:
 
 Pilihan ini juga bisa dikirim ke API sebagai `analysis_engine` (`auto`, `local`, `gemini`). Manual AI selection mengabaikannya.
 
-**Kalau LFM3 gagal.** Cell 6b menampilkan server log dan menghapus konfigurasi `LLM_*`, jadi dashboard otomatis kembali ke Gemini/manual. Perbaiki error, jalankan ulang cell 6b, lalu **restart server OpenShorts**: cell 13 (stop) → cell 10 (start) — server membaca `.env` saat start.
+**Kalau LFM3 gagal.** Cell 5 menampilkan server log dan menghapus konfigurasi `LLM_*`, jadi dashboard otomatis kembali ke Gemini/manual. Perbaiki error, jalankan ulang cell 5, lalu **restart server OpenShorts**: cell 7 → **Hentikan server**, lalu cell 6 — server membaca `.env` saat start.
 
 **Batas.** LFM3 1.7B lebih lemah dari Gemini/7B dalam menilai nuansa hook; validator skema akan retry kalau JSON tidak lengkap. LFM3 **text-only**: layout picker, detektor konten layar, dan video tanpa suara tetap memakai Gemini (atau fallback masing-masing).
 
@@ -181,8 +181,8 @@ Notebook mengunduh `cloudflared` dan membuat quick tunnel `https://....trycloudf
 
 OpenShorts bisa memposting ke TikTok, Instagram Reels, dan YouTube Shorts lewat [Upload-Post](https://www.upload-post.com/). Free tier mereka (sekitar 10 upload/bulan, tanpa kartu kredit) cukup untuk mencoba.
 
-- Isi `UPLOAD_POST_API_KEY` di cell 2. Dashboard otomatis mendeteksi key server ini; kamu tinggal memilih profil yang terhubung di `Settings` (tidak perlu mengetik ulang key).
-- Bisa juga mengosongkannya di cell 2 lalu memasukkan key langsung di `Settings` dashboard. Key browser tidak disimpan di server.
+- Isi `UPLOAD_POST_API_KEY` di cell 1. Dashboard otomatis mendeteksi key server ini; kamu tinggal memilih profil yang terhubung di `Settings` (tidak perlu mengetik ulang key).
+- Bisa juga mengosongkannya di cell 1 lalu memasukkan key langsung di `Settings` dashboard. Key browser tidak disimpan di server.
 - Kalau tidak punya key: tetap bisa membuat video, lalu **download manual** dari dashboard.
 - Tidak ada API resmi gratis dari TikTok/Instagram untuk akun pribadi. Upload-Post adalah jalan termudah; alternatifnya upload manual.
 - YouTube juga bisa upload manual; kualitas dan fitur tidak berkurang.
@@ -251,7 +251,7 @@ LFM3 menyimpan runtime dan model di luar folder project:
 /content/lfm3-server.log        # log server LFM3
 ```
 
-Semua hilang saat runtime Colab berhenti; cell 6b akan mengunduh ulang di sesi berikutnya. Folder `output/` tetap perlu di-backup ke Drive (cell 14).
+Semua hilang saat runtime Colab berhenti; cell 5 akan mengunduh ulang di sesi berikutnya. Folder `output/` tetap perlu di-backup ke Drive (cell 7 → **Backup ke Drive**).
 
 ---
 
@@ -259,12 +259,12 @@ Semua hilang saat runtime Colab berhenti; cell 6b akan mengunduh ulang di sesi b
 
 Default notebook memakai repo <https://github.com/ardyhim/openshorts.git> dan **tidak perlu upload ZIP**.
 
-- Untuk mengambil update terbaru: jalankan ulang cell **4** dengan `UPDATE_PROJECT=True`.
-- Untuk clone ulang dari nol (menghapus folder project): set `RESET_PROJECT=True`, lalu jalankan cell **4**.
-- Untuk fork sendiri: ganti `REPO_URL` di cell **2** dengan URL fork Anda. Pastikan fork berisi `free_backends.py` dan `colab/requirements-colab.txt`.
+- Untuk mengambil update terbaru: jalankan ulang cell **2** dengan `UPDATE_PROJECT=True`.
+- Untuk clone ulang dari nol (menghapus folder project): set `RESET_PROJECT=True`, lalu jalankan cell **2**.
+- Untuk fork sendiri: ganti `REPO_URL` di cell **1** dengan URL fork Anda. Pastikan fork berisi `free_backends.py` dan `colab/requirements-colab.txt`.
 - `REPO_BRANCH` default `main`.
 
-`git reset --hard` saat update hanya membuang perubahan pada file yang dilacak git. `.env`, `output/`, `uploads/`, dan cache model tidak dihapus. Folder lama dari ZIP yang belum punya `.git` otomatis diubah menjadi git repo oleh cell **4**, jadi tidak perlu clone ulang dari nol.
+`git reset --hard` saat update hanya membuang perubahan pada file yang dilacak git. `.env`, `output/`, `uploads/`, dan cache model tidak dihapus. Folder lama yang belum punya `.git` otomatis diubah menjadi git repo oleh cell **2**, jadi tidak perlu clone ulang dari nol.
 
 ---
 
@@ -274,24 +274,24 @@ Default notebook memakai repo <https://github.com/ardyhim/openshorts.git> dan **
 |---|---|
 | `GPU tidak terdeteksi` | Runtime belum T4. `Runtime` → `Change runtime type` → `T4 GPU`, lalu ulang dari cell 1. |
 | `mediapipe` / `numpy` error | MediaPipe hanya dipasang di Python <= 3.12. Di Colab Python 3.13, app otomatis memakai OpenCV Haar (`face_detection_compat.py`), jadi `mediapipe` tidak diperlukan. Jangan `pip install mediapipe` versi terbaru: `mp.solutions` sudah dihapus. |
-| `pip install` gagal / `ResolutionImpossible` | Jalankan ulang cell 4 dengan `UPDATE_PROJECT=True` lalu cell 5. `requirements-colab.txt` memakai `py3langid==0.2.2` dan marker NumPy/OpenCV per versi Python. Versi 0.3.0 memaksa NumPy 2 dan bentrok dengan Python <= 3.12. |
-| `TypeError: open() got an unexpected keyword argument 'metadata_errors'` | `av` 19 menghapus argumen yang masih dipakai `faster-whisper 1.2.1`. Jalankan `pip install "av==18.1.0"`, lalu restart server: cell 13 (stop) → cell 10 (start). |
-| `RuntimeError: Library libcublas.so.12 is not found` | Cell 5 memasang `nvidia-cublas-cu12` bila belum ada, dan cell 10 menambahkan folder lib-nya ke `LD_LIBRARY_PATH`. Jalankan ulang cell 5 lalu cell 10. Kalau GPU tetap tidak bisa, Whisper otomatis retry di CPU dan job tetap selesai (lebih lambat). |
-| `CUDA out of memory` | Restart runtime, turunkan `IMAGE_STEPS` ke 12–16, jalankan satu video sekaligus. Kalau AI Shorts (SDXL) berebut VRAM dengan LFM3, set `LFM3_FORCE_CPU=True` atau `LFM3_ENABLED=False` di cell 2 lalu jalankan ulang cell 6b. |
-| SDXL lambat / download macet | Jalankan cell 8 `PRELOAD_SDXL=True`; cek koneksi dan sisa disk. |
+| `pip install` gagal / `ResolutionImpossible` | Jalankan ulang cell 2 dengan `UPDATE_PROJECT=True` lalu cell 3. `requirements-colab.txt` memakai `py3langid==0.2.2` dan marker NumPy/OpenCV per versi Python. Versi 0.3.0 memaksa NumPy 2 dan bentrok dengan Python <= 3.12. |
+| `TypeError: open() got an unexpected keyword argument 'metadata_errors'` | `av` 19 menghapus argumen yang masih dipakai `faster-whisper 1.2.1`. Jalankan `pip install "av==18.1.0"`, lalu restart server: cell 7 → **Hentikan server**, lalu cell 6. |
+| `RuntimeError: Library libcublas.so.12 is not found` | Cell 3 memasang `nvidia-cublas-cu12` bila belum ada, dan cell 6 menambahkan folder lib-nya ke `LD_LIBRARY_PATH`. Jalankan ulang cell 3 lalu cell 6. Kalau GPU tetap tidak bisa, Whisper otomatis retry di CPU dan job tetap selesai (lebih lambat). |
+| `CUDA out of memory` | Restart runtime, turunkan `IMAGE_STEPS` ke 12–16, jalankan satu video sekaligus. Kalau AI Shorts (SDXL) berebut VRAM dengan LFM3, set `LFM3_FORCE_CPU=True` atau `LFM3_ENABLED=False` di cell 1 lalu jalankan ulang cell 5. |
+| SDXL lambat / download macet | Model diunduh otomatis saat fitur pertama kali dipakai; cek koneksi dan sisa disk. |
 | Wav2Lip gagal | Pipeline otomatis memakai still image + audio. Cek `server.log`. |
-| Gemini `404` | Jalankan ulang cell 6 dengan key; model dipilih dari daftar yang tersedia. |
+| Gemini `404` | Jalankan ulang cell 4 dengan key; model dipilih dari daftar yang tersedia. |
 | Gemini `429` | Kuota free tier habis. Tunggu beberapa menit/hari, ganti key, atau centang **manual AI selection** lalu ikuti bagian 2.4 (tanpa Gemini). |
-| LFM3 gagal disiapkan / `transformers` error | Lihat output cell 6b dan `/content/lfm3-server.log`. Pastikan `git pull` sudah mengambil `colab/lfm3_server.py`. Kalau CUDA bermasalah, set `LFM3_FORCE_CPU=True` di cell 2 lalu jalankan ulang cell 6b. Kalau tetap gagal, set `LFM3_ENABLED=False`; Clip Generator memakai Gemini/manual. |
-| `No module named transformers` / versi transformers salah | Cell 6b memakai venv terpisah `/content/lfm3-venv` dengan `transformers==5.21.0`; app utama tetap transformers 4.57.1 untuk SDXL. Hapus `/content/lfm3-venv` lalu jalankan ulang cell 6b kalau install setengah jalan. Kalau pembuatan venv gagal, cell mencoba fallback `venv --without-pip`, `virtualenv`, dan `uv`; pesan error aslinya ikut dicetak. |
+| LFM3 gagal disiapkan / `transformers` error | Lihat output cell 5 dan `/content/lfm3-server.log`. Pastikan `git pull` sudah mengambil `colab/lfm3_server.py`. Kalau CUDA bermasalah, set `LFM3_FORCE_CPU=True` di cell 1 lalu jalankan ulang cell 5. Kalau tetap gagal, set `LFM3_ENABLED=False`; Clip Generator memakai Gemini/manual. |
+| `No module named transformers` / versi transformers salah | Cell 5 memakai venv terpisah `/content/lfm3-venv` dengan `transformers==5.21.0`; app utama tetap transformers 4.57.1 untuk SDXL. Hapus `/content/lfm3-venv` lalu jalankan ulang cell 5 kalau install setengah jalan. Kalau pembuatan venv gagal, cell mencoba fallback `venv --without-pip`, `virtualenv`, dan `uv`; pesan error asli ikut dicetak. |
 | LFM3 lambat / JSON sering retry | Wajar untuk model 1.7B, terutama di CPU. Pakai `LFM3_CONTEXT=16384`, satu video sekaligus, dan pilih **Gemini only** atau manual AI selection untuk video panjang/nuansa sulit. Di T4 model berjalan fp16; di CPU fp32. |
-| Dashboard masih memakai LFM3 yang sudah mati | Server OpenShorts membaca `.env` hanya saat start. Jalankan cell 13 (stop) lalu cell 10 (start). Kalau LFM3 memang gagal, jalankan ulang cell 6b untuk membersihkan konfigurasi `LLM_*`. |
+| Dashboard masih memakai LFM3 yang sudah mati | Server OpenShorts membaca `.env` hanya saat start. Jalankan cell 7 → **Hentikan server**, lalu cell 6. Kalau LFM3 memang gagal, jalankan ulang cell 5 untuk membersihkan konfigurasi `LLM_*`. |
 | Panel **MANUAL AI** tidak muncul | Pastikan server berjalan dengan `FREE_MODE=1` / `BILLING_ENABLED=0` dan job dijalankan dengan opsi manual. Di cloud berbayar fitur ini memang tidak tersedia. Kalau video tidak punya suara, transkrip tidak bisa dibuat; pakai clip generation otomatis. |
 | Import JSON ditolak | Pastikan `start` < `end`, memakai detik absolut, dan tidak melewati durasi video. Baca pesan validasi di panel. Markdown fence diperbolehkan. |
 | `yt-dlp` gagal | Upload file video langsung, bukan URL YouTube. |
-| Dashboard tidak muncul | Cek cell 12 (`server.log`), pastikan cell 10 sukses dan port 8000 hidup. |
-| `npm ci` gagal | Pastikan Node.js >= 18. Cell 3 memasang Node 22 bila perlu. |
-| Hasil hilang | Jalankan cell 14 (backup ke Drive) sebelum runtime berhenti. |
+| Dashboard tidak muncul | Cek `/content/openshorts/server.log`, pastikan cell 6 sukses dan port 8000 hidup. |
+| `npm ci` gagal | Pastikan Node.js >= 18. Cell 2 memasang Node 22 bila perlu. |
+| Hasil hilang | Jalankan cell 7 (backup ke Drive) sebelum runtime berhenti. |
 
 ---
 

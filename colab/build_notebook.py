@@ -25,93 +25,39 @@ def code(text):
 md(r"""
 # OpenShorts — Free Mode di Google Colab
 
-Notebook ini menjalankan **OpenShorts versi free mode** di Google Colab (disarankan GPU **T4** gratis). Semua model yang sebelumnya memakai layanan berbayar diganti dengan model lokal atau layanan gratis:
+Jalankan **OpenShorts free mode** di Colab (disarankan **T4 GPU**). Fitur berbayar diganti model lokal/gratis:
 
 | Fitur | Pengganti gratis |
 |---|---|
-| fal.ai Flux (aktor & b-roll) | SDXL **RealVisXL V4.0** lokal di GPU |
-| fal.ai Kling/VEED lipsync | **Wav2Lip** lokal (fallback: still image + audio) |
-| ElevenLabs TTS | **edge-tts** (Microsoft neural voices) |
-| ElevenLabs dubbing | **faster-whisper + Gemini/Google Translate + edge-tts** |
-| Gemini image thumbnail | frame asli video + teks (PIL) |
-| Gemini moment picker | **LFM3-1.7B** lokal via Transformers (default, tanpa key) |
-| AWS S3 | folder `output/` lokal |
-| Upload-Post | opsional (free tier) atau download manual |
+| Flux (aktor & b-roll) | SDXL **RealVisXL V4.0** lokal |
+| Kling/VEED lipsync | **Wav2Lip** lokal (fallback still image) |
+| ElevenLabs TTS/dubbing | **edge-tts** + **faster-whisper** |
+| Gemini moment picker | **LFM3-1.7B** lokal (default) / Gemini / manual |
+| Thumbnail Gemini | frame asli + teks |
+| S3 / Upload-Post | folder `output/` / upload manual |
 
-**Yang perlu disiapkan**
+**Cara pakai**
 
-1. Runtime Colab dengan GPU: `Runtime` → `Change runtime type` → `T4 GPU`.
-2. **Tidak perlu upload file.** Cell 4 otomatis menjalankan `git clone` dari <https://github.com/ardyhim/openshorts.git> ke `/content/openshorts`. Jalankan ulang cell 4 kapan pun untuk mengambil update terbaru; `.env`, `output/`, dan cache tetap aman. Opsi Upload ZIP / Google Drive hanya cadangan offline.
-3. **Opsional tetapi sangat disarankan:** API key Gemini gratis dari [Google AI Studio](https://aistudio.google.com/apikey). Tanpa key, AI Shorts dan YouTube Studio tetap jalan dengan fallback lokal. **Clip Generator** otomatis memakai **LFM3 lokal** (cell 6b) atau Gemini; **manual AI selection** juga tersedia tanpa Gemini sama sekali: transkrip diekspor, kamu minta AI apa pun memilih timestamp, lalu import JSON-nya. Lihat bagian **Manual AI selection** di bawah.
+1. `Runtime` → `Change runtime type` → **T4 GPU**.
+2. Jalankan cell **1–6** berurutan (atau `Runtime` → `Run all`). Cell 2 otomatis `git clone`/update repo; tidak perlu upload file.
+3. Buka link dashboard dari output cell **6**.
 
-**LFM3 (otomatis, tanpa Gemini):**
+**Opsional**
+- Gemini key gratis dari [Google AI Studio](https://aistudio.google.com/apikey). Tanpa key, AI Shorts/YouTube Studio memakai fallback lokal; Clip Generator memakai LFM3 atau manual AI selection.
+- **Manual AI selection:** aktifkan di advanced options, download transkrip, minta AI eksternal memilih timestamp, lalu import JSON. Tanpa Gemini.
+- **LFM3** diunduh otomatis (~3.4 GB) oleh cell **5**. Kalau gagal, set `LFM3_ENABLED=False` di cell 1 lalu jalankan ulang cell 5.
+- Cell **7** opsional untuk backup ke Drive dan/atau menghentikan server.
 
-Cell 2 menyalakan `LFM3_ENABLED=True`. Cell 6b mengunduh checkpoint `LiquidAI/LFM3-1.7B` (~3.4 GB, BF16) dan memuatnya langsung dengan `transformers` (`AutoModelForCausalLM` + `trust_remote_code=True`) di GPU/CPU Colab, lalu menjalankan server OpenAI-compatible di `127.0.0.1:8089`. Tidak ada build llama.cpp dan tidak ada GGUF. Unduhan pertama biasanya 1–3 menit; sesi berikutnya memakai cache yang sama selama runtime hidup. Di dashboard, buka **advanced options → clip analysis engine** dan pilih **Local only (lfm3-1.7b)** kalau ingin memaksa LFM3. LFM3 hanya teks: layout picker dan video tanpa suara tetap butuh Gemini. Kalau setup gagal, set `LFM3_ENABLED=False` lalu jalankan ulang cell 6b; Clip Generator memakai Gemini/manual.
-
-**Manual AI selection (tanpa Gemini):**
-
-1. Buka **advanced options** di dashboard dan centang **manual AI selection (no Gemini)**.
-2. Proses video seperti biasa. Whisper membuat transkrip, lalu job berhenti di status **MANUAL AI** (belum render, tanpa panggilan Gemini).
-3. Klik **download transcript** di panel kanan. File JSON berisi transkrip bertimestamp, kandidat window, durasi target, dan prompt siap pakai.
-4. Berikan file itu ke ChatGPT/Claude/Gemini web/Ollama/LM Studio. Minta jawaban berupa JSON `{"clips":[{"start":..., "end":..., "title":..., "hook":...}]}`.
-5. Klik **import ai result**, pilih jawaban AI. App memvalidasi, merapikan cut ke batas kata, membuang overlap, lalu merender.
-6. Kalau job otomatis gagal karena kuota tetapi transkrip sudah ada, panel manual tetap muncul di status error.
-
-> `start`/`end` memakai detik absolut. Markdown fence diperbolehkan. Import juga menerima bentuk metadata internal (`shorts`, `video_title_for_youtube_short`, `predicted_score`, dst.).
-
-> **Python 3.13:** MediaPipe 0.10.21 tidak punya wheel untuk Python 3.13, jadi cell 5 otomatis melewatinya dan app memakai **OpenCV Haar** (`face_detection_compat.py`) untuk face tracking. Di Python <= 3.12, MediaPipe tetap dipakai. Tidak ada langkah manual.
-
-> **Peringatan privasi:** opsi tunnel **Cloudflared** membuat dashboard bisa diakses publik tanpa login. Gunakan **Colab proxy** (default) kalau tidak ingin orang lain membuka GPU dan hasil video Anda.
-
-> **Lisensi model:** **Wav2Lip hanya untuk riset/personal/non-komersial** (lihat README upstream). Untuk konten komersial, set `WAV2LIP_DISABLE=1` di `.env` agar pipeline memakai still image + audio, atau ganti dengan model berlisensi komersial. RealVisXL V4.0 memakai lisensi OpenRAIL++-M. **LFM3-1.7B** memakai **LFM Open License v1.0** (`lfm1.0`), bukan MIT; baca `LICENSE` di repo Hugging Face.
-
-> **Batas Colab gratis:** sesi bisa terputus kapan saja. Simpan hasil ke Google Drive sebelum runtime mati (ada cell backup di bagian akhir).
-""")
-
-code(r"""
-#@title 1. Cek runtime Colab (GPU, RAM, disk)
-import os, platform, shutil, subprocess, sys
-
-print("Python   :", sys.version.split()[0])
-print("Platform :", platform.platform())
-try:
-    import psutil
-    print(f"RAM      : {psutil.virtual_memory().total / 1e9:.1f} GB")
-except Exception:
-    pass
-try:
-    total, used, free = shutil.disk_usage("/content" if os.path.isdir("/content") else ".")
-    print(f"Disk     : {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB")
-    if free < 35e9:
-        print("⚠️  Ruang disk < 35 GB. Model SDXL + Wav2Lip butuh ~10 GB; ruang bisa habis.")
-except Exception:
-    pass
-
-if shutil.which("nvidia-smi"):
-    out = subprocess.run(
-        ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"],
-        capture_output=True, text=True)
-    print("GPU      :", (out.stdout or out.stderr).strip())
-    if out.returncode != 0:
-        print("⚠️  nvidia-smi gagal; cek Runtime > Change runtime type > T4 GPU.")
-else:
-    print("⚠️  GPU tidak terdeteksi. Runtime masih bisa jalan, tetapi SDXL akan memakai placeholder dan Whisper memakai CPU (lambat).")
-    print("    Pilih Runtime > Change runtime type > Hardware accelerator > T4 GPU, lalu jalankan ulang dari awal.")
+> **Privasi:** Cloudflared membuat URL publik tanpa login. Gunakan Colab proxy (default). **Lisensi:** Wav2Lip hanya riset/non-komersial; LFM3 memakai LFM Open License v1.0.
 """)
 
 code(r'''
-#@title 2. Konfigurasi utama { display-mode: "form" }
-#@markdown ### Sumber project
-#@markdown **Git clone** (default): ambil/update langsung dari GitHub, tanpa upload file.
-#@markdown Upload ZIP / Google Drive hanya cadangan kalau GitHub tidak bisa diakses.
-PROJECT_SOURCE = "Git clone" #@param ["Git clone", "Upload ZIP", "Google Drive"]
+#@title 1. Konfigurasi + cek runtime { display-mode: "form" }
+#@markdown ### Project
+#@markdown Notebook selalu memakai **Git clone/update** dari GitHub; tidak perlu upload file.
 PROJECT_DIR = "/content/openshorts" #@param {type:"string"}
 UPDATE_PROJECT = True #@param {type:"boolean"}
 RESET_PROJECT = False #@param {type:"boolean"}
-
-#@markdown ### Lokasi ZIP (abaikan kalau memilih Git clone)
-ZIP_PATH = "/content/openshorts-free-colab.zip" #@param {type:"string"}
-DRIVE_ZIP_PATH = "/content/drive/MyDrive/openshorts-free-colab.zip" #@param {type:"string"}
 
 #@markdown ### Git clone
 REPO_URL = "https://github.com/ardyhim/openshorts.git" #@param {type:"string"}
@@ -142,7 +88,7 @@ LFM3_FORCE_CPU = False #@param {type:"boolean"}
 #@markdown ### Akses dashboard
 PUBLIC_TUNNEL = "Colab proxy (privat)" #@param ["Colab proxy (privat)", "Cloudflared (publik)", "Tidak perlu"]
 
-import getpass, os
+import getpass, os, platform, shutil, subprocess, sys
 
 GEMINI_API_KEY = (GEMINI_API_KEY or "").strip()
 HF_TOKEN = (HF_TOKEN or "").strip()
@@ -161,8 +107,6 @@ PROJECT_DIR = os.path.abspath(os.path.expanduser(PROJECT_DIR.strip()))
 if PROJECT_DIR in ("/", "/content"):
     raise ValueError("PROJECT_DIR terlalu umum; pakai misalnya /content/openshorts")
 os.makedirs(os.path.dirname(PROJECT_DIR), exist_ok=True)
-ZIP_PATH = os.path.abspath(os.path.expanduser(ZIP_PATH.strip()))
-DRIVE_ZIP_PATH = os.path.abspath(os.path.expanduser(DRIVE_ZIP_PATH.strip()))
 
 
 def _mask(value):
@@ -173,7 +117,7 @@ def _mask(value):
     return value[:4] + "..." + value[-4:]
 
 
-print("Sumber project :", PROJECT_SOURCE)
+print("Sumber project : Git clone")
 print("Project dir    :", PROJECT_DIR)
 print("Gemini key     :", _mask(GEMINI_API_KEY))
 print("HF token       :", _mask(HF_TOKEN))
@@ -184,11 +128,39 @@ print("Whisper        :", WHISPER_MODEL)
 print("LFM3 lokal     :", "aktif" if LFM3_ENABLED else "nonaktif",
       f"(Transformers, ctx {LFM3_CONTEXT})" if LFM3_ENABLED else "")
 print("Akses          :", PUBLIC_TUNNEL)
+
+print("\n== Cek runtime ==")
+print("Python   :", sys.version.split()[0])
+print("Platform :", platform.platform())
+try:
+    import psutil
+    print(f"RAM      : {psutil.virtual_memory().total / 1e9:.1f} GB")
+except Exception:
+    pass
+try:
+    total, used, free = shutil.disk_usage("/content" if os.path.isdir("/content") else ".")
+    print(f"Disk     : {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB")
+    if free < 35e9:
+        print("⚠️  Ruang disk < 35 GB. Model SDXL + Wav2Lip butuh ~10 GB; ruang bisa habis.")
+except Exception:
+    pass
+
+if shutil.which("nvidia-smi"):
+    out = subprocess.run(
+        ["nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"],
+        capture_output=True, text=True)
+    print("GPU      :", (out.stdout or out.stderr).strip())
+    if out.returncode != 0:
+        print("⚠️  nvidia-smi gagal; cek Runtime > Change runtime type > T4 GPU.")
+else:
+    print("⚠️  GPU tidak terdeteksi. Runtime masih bisa jalan, tetapi SDXL akan memakai placeholder dan Whisper memakai CPU (lambat).")
+    print("    Pilih Runtime > Change runtime type > Hardware accelerator > T4 GPU, lalu jalankan ulang dari awal.")
 ''')
 
 code(r'''
-#@title 3. Install ffmpeg + font + utilitas sistem
+#@title 2. Install sistem, ambil project, build dashboard
 import os, shutil, subprocess, sys
+from pathlib import Path
 
 def run(cmd, **kwargs):
     print("+", " ".join(cmd) if isinstance(cmd, list) else cmd)
@@ -239,13 +211,8 @@ if not node_ok:
     raise RuntimeError("Node.js/npm tidak siap; dashboard tidak bisa dibuild.")
 print("node   :", subprocess.run(["node", "--version"], capture_output=True, text=True).stdout.strip())
 print("npm    :", subprocess.run(["npm", "--version"], capture_output=True, text=True).stdout.strip())
-''')
 
-code(r'''
-#@title 4. Ambil / update project OpenShorts
-import os, shutil, subprocess, zipfile
-from pathlib import Path
-
+print("\n== Ambil / update project ==")
 PROJECT_DIR = os.path.abspath(PROJECT_DIR)
 
 
@@ -258,40 +225,13 @@ def looks_like_project(path):
     )
 
 
-def locate_root(base):
-    base = Path(base)
-    if looks_like_project(base):
-        return base
-    for app in base.rglob("app.py"):
-        if looks_like_project(app.parent):
-            return app.parent
-    return None
-
-
-def install_from_root(root):
-    root = Path(root)
-    if os.path.exists(PROJECT_DIR) and RESET_PROJECT:
-        print("Menghapus project lama:", PROJECT_DIR)
-        shutil.rmtree(PROJECT_DIR)
-    if os.path.exists(PROJECT_DIR):
-        if looks_like_project(PROJECT_DIR):
-            print("Project sudah ada dan valid; dilewati. Set RESET_PROJECT=True untuk menimpa.")
-            return
-        raise RuntimeError(
-            f"{PROJECT_DIR} sudah ada tetapi bukan project free mode. "
-            "Set RESET_PROJECT=True atau hapus folder tersebut."
-        )
-    shutil.copytree(root, PROJECT_DIR)
-    print("Project disalin ke:", PROJECT_DIR)
-
-
 def git(*args, check=True):
     return subprocess.run(["git", "-C", PROJECT_DIR, *args], check=check)
 
 
 def update_git_project():
-    # Folder hasil upload ZIP lama tidak punya .git. Jadikan repo git di tempat
-    # supaya update berikutnya mudah, tanpa menghapus .env/output/cache:
+    # Folder lama yang belum punya .git dijadikan repo git di tempat supaya
+    # update berikutnya mudah, tanpa menghapus .env/output/cache:
     # reset --hard hanya menimpa file yang dilacak git.
     if not (Path(PROJECT_DIR) / ".git").is_dir():
         print("Folder lama bukan git repo; mengubahnya menjadi clone git...")
@@ -321,9 +261,9 @@ if os.path.exists(PROJECT_DIR) and RESET_PROJECT:
 
 if looks_like_project(PROJECT_DIR):
     print("Project free mode sudah ada:", PROJECT_DIR)
-    if PROJECT_SOURCE == "Git clone" and UPDATE_PROJECT:
+    if UPDATE_PROJECT:
         update_git_project()
-    elif PROJECT_SOURCE == "Git clone":
+    else:
         print("UPDATE_PROJECT=False; memakai versi yang ada saat ini.")
 else:
     if os.path.exists(PROJECT_DIR):
@@ -331,59 +271,15 @@ else:
             f"{PROJECT_DIR} sudah ada tetapi bukan project free mode. "
             "Set RESET_PROJECT=True atau hapus folder tersebut."
         )
-
-    zip_path = None
-    if PROJECT_SOURCE == "Upload ZIP":
-        if not os.path.exists(ZIP_PATH):
-            from google.colab import files
-            print("Pilih file openshorts-free-colab.zip dari komputer Anda...")
-            uploaded = files.upload()
-            if not uploaded:
-                raise RuntimeError("Tidak ada file yang di-upload.")
-            name, data = next(iter(uploaded.items()))
-            print(f"Upload: {name} ({len(data) / 1e6:.1f} MB)")
-            with open(ZIP_PATH, "wb") as fh:
-                fh.write(data)
-        zip_path = ZIP_PATH
-    elif PROJECT_SOURCE == "Google Drive":
-        if not os.path.isdir("/content/drive/MyDrive"):
-            from google.colab import drive
-            drive.mount("/content/drive")
-        if not os.path.exists(DRIVE_ZIP_PATH):
-            raise FileNotFoundError(
-                f"ZIP tidak ditemukan di Drive: {DRIVE_ZIP_PATH}\n"
-                "Upload openshorts-free-colab.zip ke My Drive, atau ganti DRIVE_ZIP_PATH."
-            )
-        zip_path = DRIVE_ZIP_PATH
-    elif PROJECT_SOURCE == "Git clone":
-        if not REPO_URL.strip():
-            raise ValueError(
-                "REPO_URL kosong. Isi URL repo GitHub (misalnya "
-                "https://github.com/ardyhim/openshorts.git), atau pilih Upload ZIP."
-            )
-        subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", REPO_BRANCH, REPO_URL, PROJECT_DIR],
-            check=True,
+    if not REPO_URL.strip():
+        raise ValueError(
+            "REPO_URL kosong. Isi URL repo GitHub, misalnya "
+            "https://github.com/ardyhim/openshorts.git."
         )
-    else:
-        raise ValueError("PROJECT_SOURCE tidak dikenal.")
-
-    if zip_path:
-        if not os.path.exists(zip_path):
-            raise FileNotFoundError(f"ZIP tidak ditemukan: {zip_path}")
-        tmp = "/content/_openshorts_unzip"
-        shutil.rmtree(tmp, ignore_errors=True)
-        print("Mengekstrak:", zip_path)
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(tmp)
-        root = locate_root(tmp)
-        if root is None:
-            raise RuntimeError(
-                "ZIP tidak berisi app.py + free_backends.py + colab/requirements-colab.txt. "
-                "Pastikan memakai openshorts-free-colab.zip yang benar."
-            )
-        install_from_root(root)
-        shutil.rmtree(tmp, ignore_errors=True)
+    subprocess.run(
+        ["git", "clone", "--depth", "1", "--branch", REPO_BRANCH, REPO_URL, PROJECT_DIR],
+        check=True,
+    )
 
 if not looks_like_project(PROJECT_DIR):
     raise RuntimeError(
@@ -395,10 +291,37 @@ os.chdir(PROJECT_DIR)
 print("\nProject siap:", PROJECT_DIR)
 print("free_backends.py:", os.path.getsize(os.path.join(PROJECT_DIR, "free_backends.py")) // 1024, "KB")
 print("Isi utama:", ", ".join(sorted(os.listdir(PROJECT_DIR))[:12]), "...")
+
+print("\n== Build dashboard ==")
+dash = os.path.join(PROJECT_DIR, "dashboard")
+if not os.path.isdir(dash):
+    raise RuntimeError("Folder dashboard/ tidak ditemukan.")
+
+build_env = dict(os.environ, NODE_OPTIONS="--max-old-space-size=4096", CI="1")
+
+if os.path.exists(os.path.join(dash, "package-lock.json")):
+    print("npm ci...")
+    subprocess.run(["npm", "ci", "--no-audit", "--no-fund"], cwd=dash, check=True, env=build_env)
+else:
+    print("package-lock.json tidak ada; npm install...")
+    subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=dash, check=True, env=build_env)
+
+print("npm run build...")
+subprocess.run(["npm", "run", "build"], cwd=dash, check=True, env=build_env)
+
+index = os.path.join(dash, "dist", "index.html")
+if not os.path.exists(index):
+    raise RuntimeError("Build selesai tetapi dashboard/dist/index.html tidak ada.")
+size_mb = sum(
+    os.path.getsize(os.path.join(root, f))
+    for root, _, files in os.walk(os.path.join(dash, "dist"))
+    for f in files
+) / 1e6
+print(f"Dashboard siap: {index} ({size_mb:.1f} MB)")
 ''')
 
 code(r'''
-#@title 5. Install dependensi Python (torch bawaan Colab tidak diganti)
+#@title 3. Install dependensi Python
 import os, subprocess, sys
 
 os.chdir(PROJECT_DIR)
@@ -417,7 +340,7 @@ try:
     pip("install", "-q", "--no-warn-script-location", "-r", "colab/requirements-colab.txt")
 except subprocess.CalledProcessError:
     print("\n❌ Install dependensi gagal. Lihat baris ERROR dari pip di atas.")
-    print("   Pastikan cell 4 memakai kode terbaru (UPDATE_PROJECT=True), lalu ulangi cell ini.")
+    print("   Pastikan cell 2 memakai kode terbaru (UPDATE_PROJECT=True), lalu ulangi cell ini.")
     print("   Konflik yang umum: py3langid versi lama butuh NumPy 2, sedangkan requirements memakai NumPy 1.x.")
     raise
 
@@ -439,7 +362,7 @@ else:
 
 # CTranslate2 (dipakai faster-whisper) memanggil dlopen("libcublas.so.12").
 # Colab bisa memakai torch CUDA 13, dan library pip tidak otomatis ada di
-# loader path. Pasang runtime CUDA 12 kalau belum ada; cell 10 menambahkan
+# loader path. Pasang runtime CUDA 12 kalau belum ada; cell 6 menambahkan
 # folder lib-nya ke LD_LIBRARY_PATH. Tanpa ini Whisper jatuh ke CPU.
 if sys.platform.startswith("linux"):
     import ctypes, glob, site
@@ -472,7 +395,7 @@ except Exception as exc:
 ''')
 
 code(r'''
-#@title 6. Tulis konfigurasi free mode + deteksi model Gemini
+#@title 4. Tulis konfigurasi free mode + Gemini
 import json, os, re, stat
 from pathlib import Path
 
@@ -591,7 +514,7 @@ else:
     print("Gemini key kosong.")
     print("  - AI Shorts, YouTube Studio, thumbnail, dubbing, dan Clip Generator tanpa AI")
     print("    tetap bisa dijalankan dengan fallback lokal.")
-    print("  - Clip Generator (pemilihan momen viral) otomatis memakai LFM3 lokal dari cell 6b;")
+    print("  - Clip Generator (pemilihan momen viral) otomatis memakai LFM3 lokal dari cell 5;")
     print("    Gemini tetap opsional untuk layout/video tanpa suara. Manual AI selection juga")
     print("    tersedia: transkrip → AI eksternal → import JSON.")
     print("  - Tambahkan key lalu jalankan ulang cell ini untuk memilih model yang tersedia.")
@@ -678,7 +601,7 @@ managed = {
     "GEMINI_API_KEY": GEMINI_API_KEY,
     "HF_TOKEN": HF_TOKEN,
     "UPLOAD_POST_API_KEY": UPLOAD_POST_API_KEY,
-    # Cell 6b writes these only after the LFM3 server is confirmed healthy.
+    # cell 5 writes these only after the LFM3 server is confirmed healthy.
     # Listing them here makes a rerun of this cell drop a stale local-LLM
     # config instead of leaving the dashboard pointed at a dead port.
     "LLM_PROVIDER": "",
@@ -732,7 +655,7 @@ print("HF_HOME                :", os.environ.get("HF_HOME"))
 ''')
 
 code(r'''
-#@title 6b. Siapkan LFM3 lokal (Transformers, tanpa llama.cpp)
+#@title 5. Siapkan LFM3 lokal (Transformers, tanpa llama.cpp)
 #@markdown Unduhan pertama ~3.4 GB (model BF16) + install runtime di venv terpisah.
 #@markdown Biasanya 1–3 menit; setelah itu server LFM3 tetap hidup di background.
 #@markdown Kalau `python -m venv` gagal, cell otomatis mencoba `venv --without-pip`, `virtualenv`, lalu `uv`.
@@ -1212,129 +1135,10 @@ except Exception as exc:
 ''')
 
 code(r'''
-#@title 7. Build dashboard (Vite)
-import os, shutil, subprocess
-
-dash = os.path.join(PROJECT_DIR, "dashboard")
-if not os.path.isdir(dash):
-    raise RuntimeError("Folder dashboard/ tidak ditemukan.")
-
-build_env = dict(os.environ, NODE_OPTIONS="--max-old-space-size=4096", CI="1")
-
-if os.path.exists(os.path.join(dash, "package-lock.json")):
-    print("npm ci...")
-    subprocess.run(["npm", "ci", "--no-audit", "--no-fund"], cwd=dash, check=True, env=build_env)
-else:
-    print("package-lock.json tidak ada; npm install...")
-    subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=dash, check=True, env=build_env)
-
-print("npm run build...")
-subprocess.run(["npm", "run", "build"], cwd=dash, check=True, env=build_env)
-
-index = os.path.join(dash, "dist", "index.html")
-if not os.path.exists(index):
-    raise RuntimeError("Build selesai tetapi dashboard/dist/index.html tidak ada.")
-size_mb = sum(
-    os.path.getsize(os.path.join(root, f))
-    for root, _, files in os.walk(os.path.join(dash, "dist"))
-    for f in files
-) / 1e6
-print(f"Dashboard siap: {index} ({size_mb:.1f} MB)")
-''')
-
-code(r'''
-#@title 8. (Opsional) Unduh model lokal sekarang
-PRELOAD_WAV2LIP = True #@param {type:"boolean"}
-PRELOAD_SDXL = False #@param {type:"boolean"}
-
-import os, shutil
-
-if not PRELOAD_WAV2LIP and not PRELOAD_SDXL:
-    print("Dilewati. Model akan diunduh otomatis saat fitur pertama kali dipakai.")
-else:
-    os.chdir(PROJECT_DIR)
-    import free_backends
-
-    if PRELOAD_WAV2LIP:
-        print("Menyiapkan Wav2Lip (repo + checkpoint ~520 MB)...")
-        ok = free_backends.ensure_wav2lip()
-        print("Wav2Lip siap:", ok)
-        if not ok:
-            print("  (Tidak masalah: AI Shorts akan memakai fallback still-image + audio.)")
-
-    if PRELOAD_SDXL:
-        print("Mengunduh + memuat RealVisXL V4.0 (~7 GB). Ini bisa 5-15 menit...")
-        try:
-            pipe = free_backends._load_image_pipeline()
-            print("SDXL siap:", bool(pipe))
-        finally:
-            free_backends.release_image_pipeline()
-
-    free = shutil.disk_usage(PROJECT_DIR).free / 1e9
-    print(f"Sisa disk: {free:.1f} GB")
-''')
-
-code(r'''
-#@title 9. Uji cepat instalasi
-import json, os, subprocess, sys, urllib.request
-
-check_code = r"""
-import sys
-import numpy as np
-print("numpy      :", np.__version__)
-print("python     :", sys.version.split()[0])
-if sys.version_info < (3, 13):
-    assert np.__version__.startswith("1."), "NumPy harus 1.x untuk mediapipe 0.10.21"
-
-import cv2
-print("opencv     :", cv2.__version__)
-
-import torch
-print("torch      :", torch.__version__, "| CUDA:", torch.cuda.is_available())
-if torch.cuda.is_available():
-    print("gpu        :", torch.cuda.get_device_name(0))
-
-from face_detection_compat import FaceDetection
-detector = FaceDetection(model_selection=1, min_detection_confidence=0.5)
-print("face detect:", detector.backend)
-result = detector.process(np.zeros((240, 320, 3), dtype=np.uint8))
-print("face detect: OK (deteksi pada frame kosong:", len(result.detections or []), "wajah)")
-
-import edge_tts, diffusers, transformers, faster_whisper
-print("free stack : OK (edge-tts, diffusers, transformers, faster-whisper)")
-
-import free_backends, thumbnail, saasshorts
-print("project    : OK (free_backends, thumbnail, saasshorts)")
-"""
-print("== Uji library ==")
-subprocess.run([sys.executable, "-c", check_code], cwd=PROJECT_DIR, env=os.environ.copy(), check=True)
-
-print("\n== Uji import server ==")
-subprocess.run(
-    [sys.executable, "-c", "import app; print('app import: OK')"],
-    cwd=PROJECT_DIR, env=os.environ.copy(), check=True,
-)
-
-print("\n== Uji LFM3 ==")
-if globals().get("LFM3_READY"):
-    base = os.environ.get("LLM_BASE_URL", "")
-    try:
-        with urllib.request.urlopen(base.rstrip("/") + "/models", timeout=10) as resp:
-            models = json.load(resp).get("data") or []
-        print("LFM3       : OK", [m.get("id") for m in models])
-        print("LLM model  :", os.environ.get("LLM_MODEL"))
-        print("LLM timeout:", os.environ.get("LLM_TIMEOUT"), "detik")
-    except Exception as exc:
-        print("LFM3       : GAGAL", exc)
-        print("Jalankan ulang cell 6b, atau pakai Gemini / manual AI selection.")
-else:
-    print("LFM3       : tidak aktif (Gemini / manual AI selection)")
-''')
-
-code(r'''
-#@title 10. Jalankan server OpenShorts
-import glob, json, os, signal, site, subprocess, sys, time, urllib.request
+#@title 6. Jalankan server + buka dashboard
+import glob, json, os, re, signal, site, subprocess, sys, time, urllib.request
 from pathlib import Path
+from IPython.display import display, HTML
 
 PROJECT_DIR = os.path.abspath(PROJECT_DIR)
 
@@ -1450,21 +1254,15 @@ for key in ("billingEnabled", "freeMode", "freeTts", "freeImages", "freeDubbing"
             "serverGemini", "manualAnalysis", "localLlm"):
     print(f"  {key:15}: {cfg.get(key)}")
 if not cfg.get("freeMode"):
-    raise RuntimeError("freeMode tidak aktif. Periksa .env / cell 6.")
+    raise RuntimeError("freeMode tidak aktif. Periksa .env / cell 4.")
 try:
     with urllib.request.urlopen("http://127.0.0.1:8000/", timeout=10) as resp:
         html = resp.read(200).decode("utf-8", errors="replace")
     print("  dashboard      :", "OK" if ("<html" in html.lower() or "<!doctype" in html.lower()) else "tidak terdeteksi")
 except Exception as exc:
     print("  dashboard      : gagal dimuat:", exc)
-''')
 
-code(r'''
-#@title 11. Buka dashboard
-import os, re, subprocess, time
-from pathlib import Path
-from IPython.display import display, HTML
-
+print("\n== Buka dashboard ==")
 PROJECT_DIR = os.path.abspath(PROJECT_DIR)
 url = "http://127.0.0.1:8000"
 
@@ -1542,7 +1340,7 @@ elif PUBLIC_TUNNEL.startswith("Cloudflared"):
             'background:#ffebe9;color:#82071e;margin:8px 0">'
             '<b>URL publik, tanpa login.</b> Siapa pun yang punya link ini bisa memakai '
             'GPU dan melihat file di folder ini. Jangan bagikan link. Hentikan runtime '
-            'setelah selesai (cell 13).</div>'
+            'setelah selesai (cell 7).</div>'
         ))
     else:
         print("Tunnel gagal dibuat. 30 baris terakhir cloudflared.log:")
@@ -1557,124 +1355,84 @@ else:
 ''')
 
 code(r'''
-#@title 12. Lihat log server + LFM3 (opsional)
+#@title 7. (Opsional) Backup hasil & hentikan server
+ACTION = "Tidak ada" #@param ["Tidak ada", "Backup ke Drive", "Hentikan server", "Backup + hentikan"]
+
+import os, shutil, signal
 from pathlib import Path
 
-for log_path in (Path(PROJECT_DIR) / "server.log", Path("/content/lfm3-server.log")):
-    if not log_path.exists():
-        print(f"{log_path} belum ada.")
-        continue
-    size = log_path.stat().st_size
-    with open(log_path, "rb") as fh:
-        fh.seek(max(0, size - 25000))
-        text = fh.read().decode("utf-8", errors="replace")
-    print(f"\n--- {log_path} ({size / 1e6:.2f} MB), 25 KB terakhir ---")
-    print("\n".join(text.splitlines()[-150:]))
-''')
+PROJECT_DIR = os.path.abspath(PROJECT_DIR)
 
-code(r'''
-#@title 13. Hentikan server dan tunnel
-import os, signal
-from pathlib import Path
+if ACTION in ("Backup ke Drive", "Backup + hentikan"):
+    src = Path(PROJECT_DIR) / "output"
+    dst = Path("/content/drive/MyDrive/OpenShorts_output")
+    if not src.exists():
+        print("Folder output belum ada; belum ada hasil untuk dibackup.")
+    else:
+        if not Path("/content/drive/MyDrive").is_dir():
+            from google.colab import drive
+            drive.mount("/content/drive")
+        dst.mkdir(parents=True, exist_ok=True)
+        count = 0
+        total = 0
+        for root, _, files in os.walk(src):
+            rel = os.path.relpath(root, src)
+            target = dst / rel
+            target.mkdir(parents=True, exist_ok=True)
+            for name in files:
+                source = Path(root) / name
+                target_file = target / name
+                shutil.copy2(source, target_file)
+                count += 1
+                total += source.stat().st_size
+        print(f"Backup {count} file ({total / 1e6:.1f} MB) ke {dst}")
 
-
-def stop_pidfile(path, label):
-    path = Path(path)
-    if not path.exists():
-        print(label, ": tidak ada PID file.")
-        return
-    try:
-        pid = int(path.read_text().strip())
-    except Exception:
+if ACTION in ("Hentikan server", "Backup + hentikan"):
+    def stop_pidfile(path, label):
+        path = Path(path)
+        if not path.exists():
+            print(label, ": tidak ada PID file.")
+            return
+        try:
+            pid = int(path.read_text().strip())
+        except Exception:
+            path.unlink(missing_ok=True)
+            return
+        try:
+            os.killpg(pid, signal.SIGTERM)
+            print(f"{label}: SIGTERM ke PID {pid}")
+        except ProcessLookupError:
+            print(label, ": proses sudah berhenti.")
+        except Exception as exc:
+            print(label, ": gagal menghentikan:", exc)
         path.unlink(missing_ok=True)
-        return
-    try:
-        os.killpg(pid, signal.SIGTERM)
-        print(f"{label}: SIGTERM ke PID {pid}")
-    except ProcessLookupError:
-        print(label, ": proses sudah berhenti.")
-    except Exception as exc:
-        print(label, ": gagal menghentikan:", exc)
-    path.unlink(missing_ok=True)
 
+    stop_pidfile(Path(PROJECT_DIR) / ".server.pid", "Server")
+    stop_pidfile(Path(PROJECT_DIR) / ".lfm3.pid", "LFM3")
+    stop_pidfile(Path(PROJECT_DIR) / ".cloudflared.pid", "Cloudflared")
+    print("Runtime Colab masih hidup. Untuk mematikan sepenuhnya: Runtime > Disconnect and delete runtime.")
 
-stop_pidfile(Path(PROJECT_DIR) / ".server.pid", "Server")
-stop_pidfile(Path(PROJECT_DIR) / ".lfm3.pid", "LFM3")
-stop_pidfile(Path(PROJECT_DIR) / ".cloudflared.pid", "Cloudflared")
-print("Runtime Colab masih hidup. Untuk mematikan sepenuhnya: Runtime > Disconnect and delete runtime.")
-''')
-
-code(r'''
-#@title 14. (Opsional) Backup hasil ke Google Drive
-import os, shutil
-from pathlib import Path
-
-src = Path(PROJECT_DIR) / "output"
-dst = Path("/content/drive/MyDrive/OpenShorts_output")
-
-if not src.exists():
-    print("Folder output belum ada; belum ada hasil untuk dibackup.")
-else:
-    if not Path("/content/drive/MyDrive").is_dir():
-        from google.colab import drive
-        drive.mount("/content/drive")
-    dst.mkdir(parents=True, exist_ok=True)
-    count = 0
-    total = 0
-    for root, _, files in os.walk(src):
-        rel = os.path.relpath(root, src)
-        target = dst / rel
-        target.mkdir(parents=True, exist_ok=True)
-        for name in files:
-            s = Path(root) / name
-            t = target / name
-            shutil.copy2(s, t)
-            count += 1
-            total += s.stat().st_size
-    print(f"Backup {count} file ({total / 1e6:.1f} MB) ke {dst}")
+if ACTION == "Tidak ada":
+    print("Tidak ada aksi. Pilih opsi di dropdown untuk backup dan/atau menghentikan server.")
 ''')
 
 md(r"""
-## Troubleshooting
+## Troubleshooting singkat
 
 | Gejala | Solusi |
 |---|---|
-| `GPU tidak terdeteksi` | `Runtime` → `Change runtime type` → `T4 GPU`, lalu jalankan ulang dari cell 1. |
-| `numpy` bukan 1.x / `mediapipe` gagal import | Jalankan ulang cell 5. MediaPipe 0.10.21 hanya dipasang di Python <= 3.12; di Python 3.13 app otomatis memakai OpenCV Haar dan tidak butuh MediaPipe. Jangan install `mediapipe` versi terbaru: `mp.solutions` sudah dihapus. |
-| `open() got an unexpected keyword argument 'metadata_errors'` | `av` 19 menghapus argumen yang masih dipakai `faster-whisper 1.2.1`. Jalankan `pip install "av==18.1.0"`, lalu restart server: cell 13 (stop) → cell 10 (start). |
-| `RuntimeError: Library libcublas.so.12 is not found` | Cell 5 memasang `nvidia-cublas-cu12` bila belum ada, dan cell 10 menambahkan folder lib-nya ke `LD_LIBRARY_PATH`. Jalankan ulang cell 5 lalu cell 10. Kalau GPU tetap tidak bisa, Whisper otomatis retry di CPU dan job tetap selesai (lebih lambat). |
-| `CUDA out of memory` | Hentikan server (cell 13), restart runtime, turunkan `IMAGE_STEPS` ke 12–16, dan jangan jalankan dua video bersamaan. Kalau AI Shorts (SDXL) berebut VRAM dengan LFM3, set `LFM3_FORCE_CPU=True` atau `LFM3_ENABLED=False` di cell 2 lalu jalankan ulang cell 6b. |
-| Model SDXL terasa lambat / tidak muncul | Unduh dulu lewat cell 8 (`PRELOAD_SDXL=True`). Generation pertama memakan 5–15 menit. |
-| `Wav2Lip` gagal | Normal: pipeline otomatis memakai still image + audio. Cek log; kualitas lipsync butuh checkpoint ~520 MB. |
-| Gemini `404 model not found` | Jalankan ulang cell 6 dengan key terisi; cell itu memilih model flash yang benar-benar tersedia untuk key Anda. |
-| Gemini `429` / `quota exceeded` | Kuota gratis habis. Tunggu beberapa menit/hari, ganti key, atau centang **manual AI selection** di advanced options lalu ikuti langkah di bagian atas notebook (tanpa Gemini). |
-| LFM3 gagal disiapkan / `transformers` error | Lihat output cell 6b dan `/content/lfm3-server.log`. Pastikan `git pull` sudah mengambil `colab/lfm3_server.py` terbaru. Kalau GPU bermasalah, set `LFM3_FORCE_CPU=True` di cell 2 lalu jalankan ulang cell 6b. Kalau tetap gagal, set `LFM3_ENABLED=False`; Clip Generator memakai Gemini/manual. |
-| `No module named transformers` / versi transformers salah | Cell 6b membuat venv terpisah `/content/lfm3-venv` dengan `transformers==5.21.0`; app utama tetap memakai transformers 4.57.1 untuk SDXL. Hapus `/content/lfm3-venv` lalu jalankan ulang cell 6b kalau install setengah jalan. Kalau pembuatan venv gagal, cell mencoba fallback `venv --without-pip`, `virtualenv`, dan `uv`; pesan error aslinya ikut dicetak. |
-| LFM3 lambat / JSON sering retry | Wajar untuk model 1.7B, terutama di CPU. Pakai `LFM3_CONTEXT=16384`, satu video sekaligus, dan pilih **Gemini only** atau manual AI selection untuk video panjang/nuansa sulit. Di T4, model berjalan fp16; di CPU, fp32 (lebih lambat). |
-| Dashboard masih memakai LFM3 yang sudah mati | Server OpenShorts membaca `.env` hanya saat start. Jalankan cell 13 (stop) lalu cell 10 (start). Kalau LFM3 memang gagal, jalankan ulang cell 6b untuk membersihkan konfigurasi `LLM_*`. |
-| Panel **MANUAL AI** tidak muncul | Pastikan server memakai `FREE_MODE=1`/`BILLING_ENABLED=0` dan job dijalankan dengan opsi manual. Video tanpa suara tidak punya transkrip untuk diekspor. |
-| Import JSON ditolak | `start` harus lebih kecil dari `end`, memakai detik absolut, dan tidak melewati durasi video. Markdown fence diperbolehkan; baca pesan validasi di panel. |
-| `yt-dlp` gagal download YouTube | Colab memakai IP datacenter yang sering diblokir YouTube. Download video di komputer lalu upload file ke dashboard. |
-| Dashboard 403 di Colab proxy | Buka ulang link, pastikan masih login akun Google yang sama, atau pakai Cloudflared. |
-| `npm ci` gagal | Pastikan Node.js >= 18 (`node -v`). Cell 3 akan memasang Node 22 bila perlu. |
-| Hasil hilang setelah runtime mati | Jalankan cell 14 sebelum runtime berhenti, atau unduh video dari dashboard. |
-| Upload-Post menolak | Free tier Upload-Post dibatasi (sekitar 10 upload/bulan). Unduh video lalu upload manual. |
+| GPU tidak terdeteksi | `Runtime` → `Change runtime type` → `T4 GPU`, lalu jalankan ulang cell 1. |
+| `npm ci` / build dashboard gagal | Pastikan Node.js >= 18; jalankan ulang cell 2. |
+| Install dependensi gagal | Jalankan ulang cell 2 lalu cell 3. Konflik umum: NumPy vs MediaPipe (lihat pesan pip). |
+| LFM3 gagal disiapkan | Lihat output cell 5 dan `/content/lfm3-server.log`. Set `LFM3_ENABLED=False` di cell 1 kalau tetap gagal; Clip Generator bisa memakai Gemini/manual. |
+| Gemini `429` / kuota habis | Tunggu, ganti key, atau pakai **manual AI selection**. |
+| Server tidak siap | Lihat `/content/openshorts/server.log`, lalu jalankan ulang cell 6. |
+| Dashboard tidak terbuka | Pastikan cell 6 sukses; coba opsi **Colab proxy** di cell 1. |
+| Hasil hilang setelah runtime mati | Jalankan cell 7 → **Backup ke Drive** sebelum runtime berhenti. |
 
-**Catatan kualitas**
+Panduan lengkap: [`colab/README.md`](https://github.com/ardyhim/openshorts/blob/main/colab/README.md).
 
-- **Clip Generator** otomatis memakai **LFM3 lokal** (cell 6b) atau Gemini. Tanpa keduanya, aktifkan **manual AI selection**: transkrip diekspor, AI eksternal memilih timestamp, lalu JSON-nya di-import. Tidak ada panggilan Gemini pada alur ini. LFM3 1.7B lebih lemah dari Gemini/7B dan hanya memproses teks; layout/video tanpa suara tetap butuh Gemini.
-- **AI Shorts** tanpa Gemini memakai template analisis/script lokal; hasilnya lebih generik.
-- **Thumbnail** free mode dibuat dari frame asli + teks, bukan gambar generatif.
-- **Dubbing** free mode memakai terjemahan per segmen + edge-tts; bukan voice cloning seperti ElevenLabs.
-- **Wav2Lip** memberi lip-sync pada foto aktor statis; hasilnya lebih sederhana daripada model avatar berbayar.
-- Semua model berjalan di T4 16 GB. Satu video AI Shorts biasanya 5–20 menit tergantung panjang script dan jumlah b-roll.
-
-**Privasi & keamanan**
-
-- Mode self-host tidak punya login. Siapa pun yang bisa membuka URL dashboard bisa memakai server dan melihat file.
-- **Colab proxy** lebih aman karena terkait sesi Google Anda; **Cloudflared** membuat URL publik. Jangan bagikan URL Cloudflared.
-- API key disimpan di `.env` runtime dan hanya ada selama sesi Colab. Jangan commit `.env` atau membagikan notebook yang sudah dijalankan.
-- Video, audio, dan hasil generate tersimpan di `/content/openshorts/output` (ephemeral). Backup ke Drive secara berkala.
+**Catatan:** LFM3 1.7B hanya untuk pemilihan momen teks; layout/video tanpa suara tetap butuh Gemini. Wav2Lip hanya riset/non-komersial.
 """)
 
 notebook = {
