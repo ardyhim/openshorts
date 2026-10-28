@@ -735,6 +735,7 @@ code(r'''
 #@title 6b. Siapkan LFM3 lokal (Transformers, tanpa llama.cpp)
 #@markdown Unduhan pertama ~3.4 GB (model BF16) + install runtime di venv terpisah.
 #@markdown Biasanya 1–3 menit; setelah itu server LFM3 tetap hidup di background.
+#@markdown Kalau `python -m venv` gagal, cell otomatis mencoba `venv --without-pip`, `virtualenv`, lalu `uv`.
 #@markdown Dashboard otomatis menampilkan pilihan **Local only (LFM3)** di advanced options.
 import json, os, shutil, signal, subprocess, sys, time, urllib.error, urllib.request
 from pathlib import Path
@@ -850,10 +851,151 @@ def run(cmd, **kwargs):
     print("+", " ".join(str(part) for part in cmd))
     result = subprocess.run([str(part) for part in cmd], **kwargs)
     if result.returncode != 0:
+        detail = "\n".join(
+            text.strip() for text in (result.stdout, result.stderr)
+            if isinstance(text, str) and text.strip())
+        if detail:
+            print(detail[-4000:])
         raise RuntimeError(
             f"perintah gagal (kode {result.returncode}): "
             + " ".join(str(part) for part in cmd))
     return result
+
+
+def attempt(name, cmd):
+    """Run a venv creation command, show its output, and report success."""
+    print(f"Mencoba {name}:")
+    print("+", " ".join(str(part) for part in cmd))
+    result = subprocess.run([str(part) for part in cmd],
+                            capture_output=True, text=True)
+    output = "\n".join(
+        text.strip() for text in (result.stdout, result.stderr)
+        if text and text.strip())
+    if output:
+        print(output[-4000:])
+    return result.returncode == 0, output
+
+
+def pip_works():
+    if not VENV_PY.exists():
+        return False
+    result = subprocess.run([str(VENV_PY), "-m", "pip", "--version"],
+                            capture_output=True, text=True)
+    return result.returncode == 0
+
+
+def system_pip_install(*packages):
+    """Install into Colab's Python, tolerating PEP 668 protection."""
+    cmd = [sys.executable, "-m", "pip", "install", "-q", *packages]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        return True
+    output = "\n".join(
+        text.strip() for text in (result.stdout, result.stderr)
+        if text and text.strip())
+    if "externally-managed-environment" in output or "externally managed" in output:
+        result = subprocess.run(cmd + ["--break-system-packages"],
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            return True
+        output = "\n".join(
+            text.strip() for text in (result.stdout, result.stderr)
+            if text and text.strip())
+    print("(install pendukung gagal:", output[-1500:] or "tanpa pesan", ")")
+    return False
+
+
+def bootstrap_pip():
+    """Give a --without-pip venv a working pip."""
+    if pip_works():
+        return True
+    # pip >= 23.1 can target another interpreter directly.
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "--python", str(VENV_PY),
+         "install", "-q", "--upgrade", "pip"],
+        capture_output=True, text=True)
+    if result.returncode == 0 and pip_works():
+        return True
+    # Last resort: the official bootstrap script inside the venv.
+    try:
+        get_pip = Path("/tmp/get-pip.py")
+        urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", get_pip)
+        result = subprocess.run([str(VENV_PY), str(get_pip)],
+                                capture_output=True, text=True)
+        if result.returncode == 0 and pip_works():
+            return True
+        print("get-pip gagal:", (result.stderr or result.stdout or "").strip()[-1500:])
+    except Exception as exc:
+        print("get-pip gagal:", exc)
+    return False
+
+
+def reset_venv():
+    if not VENV_DIR.exists():
+        return
+    shutil.rmtree(VENV_DIR, ignore_errors=True)
+    if VENV_DIR.exists():
+        subprocess.run(["rm", "-rf", str(VENV_DIR)],
+                       capture_output=True, text=True)
+
+
+def create_venv():
+    """Create the LFM3 venv, with fallbacks for Colab images without ensurepip."""
+    print("Python LFM3  :", sys.version.split()[0], sys.executable)
+    failures = []
+    plans = [
+        ("venv", [sys.executable, "-m", "venv",
+                  "--system-site-packages", str(VENV_DIR)]),
+        # Some Colab images ship Python without ensurepip, which makes plain
+        # "python -m venv" fail before it writes anything useful.
+        ("venv --without-pip", [sys.executable, "-m", "venv",
+                                "--system-site-packages", "--without-pip",
+                                str(VENV_DIR)]),
+    ]
+    for name, cmd in plans:
+        reset_venv()
+        ok, output = attempt(name, cmd)
+        if not ok:
+            failures.append(f"{name}:\n{output[-1500:] or '(tanpa pesan)'}")
+            continue
+        if name.endswith("--without-pip") and not bootstrap_pip():
+            failures.append(f"{name}: pip tidak bisa dipasang")
+            continue
+        if pip_works():
+            print("Venv LFM3    : siap")
+            return
+        failures.append(f"{name}: python/pip venv tidak bisa dipakai")
+
+    # virtualenv bundles its own pip/setuptools wheels, so it works even when
+    # the stdlib venv module or ensurepip is broken.
+    reset_venv()
+    if system_pip_install("virtualenv"):
+        ok, output = attempt("virtualenv", [
+            sys.executable, "-m", "virtualenv",
+            "--system-site-packages", str(VENV_DIR)])
+        if ok and pip_works():
+            print("Venv LFM3    : siap (virtualenv)")
+            return
+        failures.append(f"virtualenv:\n{output[-1500:] or '(tanpa pesan)'}")
+
+    # uv is preinstalled on some Colab images and also works without ensurepip.
+    uv = shutil.which("uv")
+    if uv:
+        reset_venv()
+        ok, output = attempt("uv venv", [
+            uv, "venv", "--system-site-packages",
+            "--python", sys.executable, str(VENV_DIR)])
+        if ok:
+            subprocess.run([uv, "pip", "install", "--python", str(VENV_PY),
+                            "-q", "pip"], capture_output=True, text=True)
+            if pip_works():
+                print("Venv LFM3    : siap (uv)")
+                return
+        failures.append(f"uv venv:\n{output[-1500:] or '(tanpa pesan)'}")
+
+    raise RuntimeError(
+        "Gagal membuat venv LFM3. Coba Runtime → Restart session lalu jalankan "
+        "ulang cell ini.\n\n" + "\n\n".join(failures))
 
 
 def ensure_runtime():
@@ -873,10 +1015,7 @@ def ensure_runtime():
             pass
     if VENV_DIR.exists():
         print("Membuat ulang venv LFM3...")
-        shutil.rmtree(VENV_DIR, ignore_errors=True)
-    print("Membuat venv LFM3 (transformers 5.21.0, terpisah dari app)...")
-    run([sys.executable, "-m", "venv", "--system-site-packages", str(VENV_DIR)],
-        check=True)
+    create_venv()
     run([str(VENV_PY), "-m", "pip", "install", "--upgrade", "pip", "-q"],
         check=True)
     run([str(VENV_PY), "-m", "pip", "install", "-q",
@@ -1510,7 +1649,7 @@ md(r"""
 | Gemini `404 model not found` | Jalankan ulang cell 6 dengan key terisi; cell itu memilih model flash yang benar-benar tersedia untuk key Anda. |
 | Gemini `429` / `quota exceeded` | Kuota gratis habis. Tunggu beberapa menit/hari, ganti key, atau centang **manual AI selection** di advanced options lalu ikuti langkah di bagian atas notebook (tanpa Gemini). |
 | LFM3 gagal disiapkan / `transformers` error | Lihat output cell 6b dan `/content/lfm3-server.log`. Pastikan `git pull` sudah mengambil `colab/lfm3_server.py` terbaru. Kalau GPU bermasalah, set `LFM3_FORCE_CPU=True` di cell 2 lalu jalankan ulang cell 6b. Kalau tetap gagal, set `LFM3_ENABLED=False`; Clip Generator memakai Gemini/manual. |
-| `No module named transformers` / versi transformers salah | Cell 6b membuat venv terpisah `/content/lfm3-venv` dengan `transformers==5.21.0`; app utama tetap memakai transformers 4.57.1 untuk SDXL. Hapus `/content/lfm3-venv` lalu jalankan ulang cell 6b kalau install setengah jalan. |
+| `No module named transformers` / versi transformers salah | Cell 6b membuat venv terpisah `/content/lfm3-venv` dengan `transformers==5.21.0`; app utama tetap memakai transformers 4.57.1 untuk SDXL. Hapus `/content/lfm3-venv` lalu jalankan ulang cell 6b kalau install setengah jalan. Kalau pembuatan venv gagal, cell mencoba fallback `venv --without-pip`, `virtualenv`, dan `uv`; pesan error aslinya ikut dicetak. |
 | LFM3 lambat / JSON sering retry | Wajar untuk model 1.7B, terutama di CPU. Pakai `LFM3_CONTEXT=16384`, satu video sekaligus, dan pilih **Gemini only** atau manual AI selection untuk video panjang/nuansa sulit. Di T4, model berjalan fp16; di CPU, fp32 (lebih lambat). |
 | Dashboard masih memakai LFM3 yang sudah mati | Server OpenShorts membaca `.env` hanya saat start. Jalankan cell 13 (stop) lalu cell 10 (start). Kalau LFM3 memang gagal, jalankan ulang cell 6b untuk membersihkan konfigurasi `LLM_*`. |
 | Panel **MANUAL AI** tidak muncul | Pastikan server memakai `FREE_MODE=1`/`BILLING_ENABLED=0` dan job dijalankan dengan opsi manual. Video tanpa suara tidak punya transkrip untuk diekspor. |

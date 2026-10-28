@@ -124,7 +124,7 @@ Catatan:
 
 Cell **2** menyalakan `LFM3_ENABLED=True` secara default. Cell **6b** akan:
 
-1. Membuat venv terpisah `/content/lfm3-venv` berisi `transformers==5.21.0` + `accelerate==1.15.0` (memakai torch CUDA bawaan Colab; app utama tetap memakai transformers 4.57.1 untuk SDXL).
+1. Membuat venv terpisah `/content/lfm3-venv` berisi `transformers==5.21.0` + `accelerate==1.15.0` (memakai torch CUDA bawaan Colab; app utama tetap memakai transformers 4.57.1 untuk SDXL). Kalau `python -m venv` gagal (mis. image Colab tanpa `ensurepip`), cell otomatis mencoba `venv --without-pip`, `virtualenv`, lalu `uv` dan menampilkan pesan error aslinya.
 2. Mengunduh checkpoint `LiquidAI/LFM3-1.7B` (~3.4 GB, BF16) ke `/content/openshorts-models/LFM3-1.7B`.
 3. Menjalankan `colab/lfm3_server.py`, yang memuat model dengan `AutoModelForCausalLM.from_pretrained(..., trust_remote_code=True, device_map="auto")` dan menyajikan endpoint OpenAI-compatible di `127.0.0.1:8089`.
 4. Menulis konfigurasi `LLM_*` ke `.env`.
@@ -283,7 +283,7 @@ Default notebook memakai repo <https://github.com/ardyhim/openshorts.git> dan **
 | Gemini `404` | Jalankan ulang cell 6 dengan key; model dipilih dari daftar yang tersedia. |
 | Gemini `429` | Kuota free tier habis. Tunggu beberapa menit/hari, ganti key, atau centang **manual AI selection** lalu ikuti bagian 2.4 (tanpa Gemini). |
 | LFM3 gagal disiapkan / `transformers` error | Lihat output cell 6b dan `/content/lfm3-server.log`. Pastikan `git pull` sudah mengambil `colab/lfm3_server.py`. Kalau CUDA bermasalah, set `LFM3_FORCE_CPU=True` di cell 2 lalu jalankan ulang cell 6b. Kalau tetap gagal, set `LFM3_ENABLED=False`; Clip Generator memakai Gemini/manual. |
-| `No module named transformers` / versi transformers salah | Cell 6b memakai venv terpisah `/content/lfm3-venv` dengan `transformers==5.21.0`; app utama tetap transformers 4.57.1 untuk SDXL. Hapus `/content/lfm3-venv` lalu jalankan ulang cell 6b kalau install setengah jalan. |
+| `No module named transformers` / versi transformers salah | Cell 6b memakai venv terpisah `/content/lfm3-venv` dengan `transformers==5.21.0`; app utama tetap transformers 4.57.1 untuk SDXL. Hapus `/content/lfm3-venv` lalu jalankan ulang cell 6b kalau install setengah jalan. Kalau pembuatan venv gagal, cell mencoba fallback `venv --without-pip`, `virtualenv`, dan `uv`; pesan error aslinya ikut dicetak. |
 | LFM3 lambat / JSON sering retry | Wajar untuk model 1.7B, terutama di CPU. Pakai `LFM3_CONTEXT=16384`, satu video sekaligus, dan pilih **Gemini only** atau manual AI selection untuk video panjang/nuansa sulit. Di T4 model berjalan fp16; di CPU fp32. |
 | Dashboard masih memakai LFM3 yang sudah mati | Server OpenShorts membaca `.env` hanya saat start. Jalankan cell 13 (stop) lalu cell 10 (start). Kalau LFM3 memang gagal, jalankan ulang cell 6b untuk membersihkan konfigurasi `LLM_*`. |
 | Panel **MANUAL AI** tidak muncul | Pastikan server berjalan dengan `FREE_MODE=1` / `BILLING_ENABLED=0` dan job dijalankan dengan opsi manual. Di cloud berbayar fitur ini memang tidak tersedia. Kalau video tidak punya suara, transkrip tidak bisa dibuat; pakai clip generation otomatis. |
