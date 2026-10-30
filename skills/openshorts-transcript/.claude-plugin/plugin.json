@@ -1,0 +1,24 @@
+{
+  "name": "openshorts-transcript",
+  "version": "1.0.0",
+  "description": "Generate the transcript JSON the OpenShorts app produces from a YouTube URL or subtitle file: the transcript export, the word-level pipeline contract, or the public YouTube captions response.",
+  "author": {
+    "name": "OpenShorts",
+    "url": "https://www.openshorts.app/"
+  },
+  "homepage": "https://github.com/mutonby/openshorts/tree/main/skills/openshorts-transcript",
+  "repository": "https://github.com/mutonby/openshorts",
+  "license": "MIT",
+  "keywords": [
+    "transcript",
+    "captions",
+    "subtitles",
+    "srt",
+    "vtt",
+    "youtube",
+    "openshorts"
+  ],
+  "skills": [
+    "."
+  ]
+}

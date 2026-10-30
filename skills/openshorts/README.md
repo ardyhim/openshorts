@@ -50,6 +50,8 @@ runs a security scan first.
 
 ## Related
 
+- `skills/openshorts-transcript/` produces the transcript alone from a YouTube
+  URL or subtitle file, in the app's export, pipeline or captions shape.
 - `cli/` is the same API as a zero-dependency CLI: `uvx openshorts process <url> --wait`.
 - `examples/n8n/` has the same pipeline as importable n8n workflows, including a
   daily channel autopilot with Telegram approval.

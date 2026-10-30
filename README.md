@@ -477,6 +477,17 @@ hermes skills install mutonby/openshorts/skills/openshorts
 openclaw skills install @mutonby/openshorts
 ```
 
+`skills/openshorts-transcript/` is the companion for transcription itself: a
+YouTube URL or SRT/VTT/TXT/JSON in, and the transcript export, word-level
+pipeline contract, or YouTube captions response the app produces.
+
+```bash
+# Claude Code; OpenCode uses ~/.config/opencode/skills/
+cp -r skills/openshorts-transcript ~/.claude/skills/
+python skills/openshorts-transcript/scripts/openshorts_transcript.py \
+  "https://youtube.com/watch?v=..." -o transcript.json
+```
+
 ### n8n
 
 An importable workflow (video URL in, published-ready clips out, no polling)

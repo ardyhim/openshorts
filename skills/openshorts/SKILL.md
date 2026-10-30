@@ -58,6 +58,13 @@ anonymous: there is no minute quota to enforce.
    `POST /api/subtitle` with `{"job_id", "clip_index", "style"}` (`classic`
    or `karaoke` word highlighting).
 
+## Transcript only
+
+To get the transcript by itself from a YouTube URL or a subtitle file, use the
+`openshorts-transcript` skill. It emits the app's transcript export, the
+word-level pipeline contract, or the public YouTube captions response, without
+starting a clip job.
+
 ## The choices the API cannot make for you
 
 **How many clips.** Leave `target_clips` unset by default: the AI decides, and
