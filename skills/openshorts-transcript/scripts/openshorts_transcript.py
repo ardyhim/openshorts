@@ -37,6 +37,10 @@ SELECTION_SCHEMA = "openshorts.clip-selection.v1"
 DEFAULT_MIN_SECONDS = 15.0
 DEFAULT_MAX_SECONDS = 60.0
 
+# Same ceilings as manual_clip_selection.py.
+MAX_CLIPS = 50
+MIN_CLIP_SECONDS = 1.0
+
 _VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _TIME_RE = re.compile(
     r"^(?:(\d{1,3}):)?(\d{1,2}):(\d{2})(?:[.,](\d{1,3}))?$")
@@ -1114,6 +1118,319 @@ def render(source, args):
 
 
 # --------------------------------------------------------------------------- #
+# Clip-selection validation (mirrors manual_clip_selection.parse_selection_payload)
+# --------------------------------------------------------------------------- #
+
+def _strip_selection_fences(text):
+    text = (text or "").strip()
+    if not text.startswith("```"):
+        return text
+    lines = text.splitlines()
+    if lines:
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+_FENCED_JSON = re.compile(
+    r"```(?:json|javascript|js)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+
+
+def _selection_loads(text):
+    """Parse a selection, tolerating the fences/prose a chat UI adds."""
+    if isinstance(text, (dict, list)):
+        return text
+    raw = str(text or "")
+    try:
+        return json.loads(_strip_selection_fences(raw))
+    except json.JSONDecodeError as exc:
+        match = _FENCED_JSON.search(raw)
+        if match:
+            try:
+                return json.loads(match.group(1).strip())
+            except json.JSONDecodeError:
+                pass
+        starts = [index for index in (raw.find("{"), raw.find("[")) if index >= 0]
+        if starts:
+            start = min(starts)
+            end = max(raw.rfind("}"), raw.rfind("]"))
+            if end > start:
+                try:
+                    return json.loads(raw[start:end + 1])
+                except json.JSONDecodeError:
+                    pass
+        raise TranscriptError(
+            "bad_selection",
+            f"That is not valid JSON (line {exc.lineno}, column {exc.colno}): "
+            f"{exc.msg}.", 400) from None
+
+
+def _selection_clips(payload):
+    """Accept the documented shape plus the app's own metadata shapes."""
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        raise TranscriptError(
+            "bad_selection",
+            "Clip selection must be a JSON object with a clips list.", 400)
+    for key in ("clips", "shorts"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+    for key in ("selection", "result", "output", "data"):
+        value = payload.get(key)
+        if isinstance(value, (dict, list)):
+            return _selection_clips(value)
+    raise TranscriptError(
+        "bad_selection",
+        'No clips found. Expected a top-level "clips" list (or the app\'s '
+        '"shorts" list).', 400)
+
+
+def _selection_number(clip, aliases):
+    for name in aliases:
+        if name not in clip or clip[name] is None or clip[name] == "":
+            continue
+        value = clip[name]
+        if isinstance(value, bool):
+            raise ValueError(f"{name} must be a number, not true/false.")
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be a number (got {value!r}).") from None
+        if not math.isfinite(number):
+            raise ValueError(f"{name} must be a finite number (got {value!r}).")
+        return number
+    raise ValueError(f"Missing required field: {aliases[0]}.")
+
+
+def _selection_text(clip, aliases):
+    for name in aliases:
+        value = clip.get(name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _selection_score(clip, warnings, index):
+    raw = None
+    for name in ("score", "predicted_score", "viral_score"):
+        if clip.get(name) not in (None, ""):
+            raw = clip[name]
+            break
+    if raw is None:
+        return 70
+    try:
+        if isinstance(raw, bool):
+            raise ValueError
+        value = float(raw)
+        if not math.isfinite(value):
+            raise ValueError
+        score = int(round(value))
+    except (TypeError, ValueError, OverflowError):
+        warnings.append(f"Clip {index + 1}: score is not a number; use 70.")
+        return 70
+    if score < 0 or score > 100:
+        warnings.append(f"Clip {index + 1}: score {score} clipped to 0-100.")
+    return max(0, min(100, score))
+
+
+def _selection_transcript_text(transcript, start, end):
+    parts = []
+    for segment in (transcript or {}).get("segments", []):
+        seg_start = _number(segment.get("start", 0))
+        seg_end = _number(segment.get("end", 0))
+        if seg_end > start and seg_start < end:
+            text = str(segment.get("text") or "").strip()
+            if text:
+                parts.append(text)
+    return " ".join(parts).strip()
+
+
+def _selection_fallback_title(transcript, start, end):
+    text = _selection_transcript_text(transcript, start, end)
+    if text:
+        sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0].strip()
+        if sentence:
+            return sentence[:100].strip()
+    return f"Clip {clock(start)}-{clock(end)}"
+
+
+def validate_selection(payload, *, duration, min_secs=None, max_secs=None,
+                       transcript=None):
+    """Check an AI's selection against the app's import rules.
+
+    Mirrors manual_clip_selection.parse_selection_payload(): what that function
+    rejects is an error here, and what it silently clamps or fills is a
+    warning. Returns a JSON-ready report; never raises for a bad clip.
+    """
+    errors = []
+    warnings = []
+    try:
+        data = _selection_loads(payload)
+        clips = _selection_clips(data)
+    except TranscriptError as exc:
+        return {"valid": False, "schema": None, "clips": 0,
+                "warnings": [], "errors": [exc.message], "items": []}
+
+    schema = data.get("schema") if isinstance(data, dict) else None
+    if schema != SELECTION_SCHEMA:
+        warnings.append(
+            f'schema should be "{SELECTION_SCHEMA}" (got {schema!r}).')
+
+    try:
+        duration = float(duration)
+    except (TypeError, ValueError):
+        duration = 0.0
+    if not math.isfinite(duration) or duration <= 0:
+        errors.append(
+            "The source duration is unknown, so timestamps cannot be "
+            "validated. Pass --duration.")
+        return {"valid": False, "schema": schema, "clips": len(clips),
+                "warnings": warnings, "errors": errors, "items": []}
+
+    if not clips:
+        errors.append("The clip list is empty.")
+    if len(clips) > MAX_CLIPS:
+        errors.append(
+            f"Too many clips ({len(clips)}). Import at most {MAX_CLIPS}.")
+
+    default_low, default_high = clip_duration_bounds()
+    min_secs = default_low if min_secs is None else float(min_secs)
+    max_secs = default_high if max_secs is None else float(max_secs)
+    if max_secs < min_secs:
+        min_secs, max_secs = default_low, default_high
+    items = []
+
+    for index, raw in enumerate(clips):
+        if not isinstance(raw, dict):
+            errors.append(f"Clip {index + 1} is not a JSON object.")
+            continue
+        try:
+            start = _selection_number(
+                raw, ("start", "start_time", "start_seconds"))
+            end = _selection_number(raw, ("end", "end_time", "end_seconds"))
+        except ValueError as exc:
+            errors.append(f"Clip {index + 1}: {exc}")
+            continue
+        if start < 0:
+            warnings.append(
+                f"Clip {index + 1}: start was negative; it will be clamped to 0.")
+            start = 0.0
+        if end > duration + 0.01:
+            warnings.append(
+                f"Clip {index + 1}: end {end:g}s is past the source; it will "
+                f"be clamped to {duration:g}s.")
+            end = duration
+        if end <= start:
+            errors.append(
+                f"Clip {index + 1}: end ({end:g}s) must be greater than start "
+                f"({start:g}s).")
+            continue
+        length = end - start
+        if length < MIN_CLIP_SECONDS:
+            errors.append(
+                f"Clip {index + 1}: {length:.2f}s is too short to render "
+                f"(minimum {MIN_CLIP_SECONDS:g}s).")
+            continue
+        if length < min_secs:
+            warnings.append(
+                f"Clip {index + 1}: {length:.1f}s is below the requested "
+                f"minimum ({min_secs:g}s).")
+        if length > max_secs:
+            warnings.append(
+                f"Clip {index + 1}: {length:.1f}s is above the requested "
+                f"maximum ({max_secs:g}s); it will be trimmed on a word "
+                f"boundary.")
+
+        score = _selection_score(raw, warnings, index)
+        title = _selection_text(
+            raw, ("title", "video_title_for_youtube_short", "youtube_title",
+                  "name"))
+        hook = _selection_text(
+            raw, ("hook", "viral_hook_text", "hook_text", "overlay_text"))
+        reason = _selection_text(raw, ("reason", "why", "explanation"))
+        tiktok = _selection_text(
+            raw, ("description_tiktok", "video_description_for_tiktok",
+                  "tiktok_description", "tiktok"))
+        instagram = _selection_text(
+            raw, ("description_instagram", "video_description_for_instagram",
+                  "instagram_description", "instagram"))
+
+        if not title:
+            warnings.append(
+                f"Clip {index + 1}: no title; the app will derive one from "
+                f"the transcript.")
+            title = _selection_fallback_title(transcript, start, end)
+        elif len(title) > 100:
+            warnings.append(
+                f"Clip {index + 1}: title is {len(title)} chars; the app "
+                f"truncates it to 100.")
+        if not hook:
+            warnings.append(
+                f"Clip {index + 1}: no hook; the app will use the title.")
+        elif len(hook.split()) > 10:
+            warnings.append(
+                f"Clip {index + 1}: hook is {len(hook.split())} words; the app "
+                f"keeps the first 10.")
+        if not reason:
+            warnings.append(f"Clip {index + 1}: no reason.")
+        elif len(reason.split()) > 20:
+            warnings.append(
+                f"Clip {index + 1}: reason is {len(reason.split())} words; "
+                f"keep it to 20.")
+        if not tiktok:
+            warnings.append(
+                f"Clip {index + 1}: no description_tiktok; the app will use "
+                f"the title.")
+        if not instagram:
+            warnings.append(
+                f"Clip {index + 1}: no description_instagram; the app will use "
+                f"the title.")
+
+        items.append({
+            "index": index + 1,
+            "start": round(start, 3),
+            "end": round(end, 3),
+            "seconds": round(length, 3),
+            "score": score,
+            "title": title,
+        })
+
+    for previous, current in zip(items, items[1:]):
+        if current["start"] < previous["end"]:
+            warnings.append(
+                f"Clips {previous['index']} and {current['index']} overlap; "
+                f"the prompt forbids covering the same moment.")
+
+    return {"valid": not errors, "schema": schema, "clips": len(clips),
+            "duration_seconds": round(duration, 3), "warnings": warnings,
+            "errors": errors, "items": items}
+
+
+def check_selection_file(path, *, source=None, duration=None,
+                         min_secs=None, max_secs=None):
+    try:
+        with open(path, "r", encoding="utf-8-sig") as handle:
+            payload = handle.read()
+    except OSError as exc:
+        raise TranscriptError(
+            "bad_file", f"Could not read {path}: {exc}", 400) from None
+    if duration is None:
+        if source is None:
+            raise TranscriptError(
+                "bad_duration",
+                "--check-selection needs a transcript source or --duration.",
+                400)
+        duration = source.get("duration") or _last_end(
+            source.get("transcript"))
+    return validate_selection(
+        payload, duration=duration, min_secs=min_secs, max_secs=max_secs,
+        transcript=(source or {}).get("transcript"))
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 
@@ -1123,8 +1440,9 @@ def build_parser():
         description="Generate an OpenShorts-compatible transcript from a "
                     "YouTube URL/ID or a subtitle/transcript file.")
     parser.add_argument(
-        "source",
-        help="YouTube URL/ID, .srt/.vtt/.txt/.json file, or '-' for stdin.")
+        "source", nargs="?",
+        help="YouTube URL/ID, .srt/.vtt/.txt/.json file, or '-' for stdin. "
+             "Optional with --check-selection when --duration is given.")
     parser.add_argument(
         "--format", choices=("export", "pipeline", "youtube", "text", "srt"),
         default="export",
@@ -1132,6 +1450,11 @@ def build_parser():
              "word-level source_transcript.json; youtube = the public "
              "/api/tools/youtube-transcript response; text/srt = readable "
              "outputs.")
+    parser.add_argument(
+        "--check-selection", metavar="FILE", default=None,
+        help="Validate a clip-selection JSON against the source and the app's "
+             "import rules. Prints a JSON report; exit 2 if it cannot be "
+             "imported.")
     parser.add_argument(
         "--lang", default=None,
         help="YouTube caption track to request (e.g. en, es-orig).")
@@ -1173,43 +1496,66 @@ def build_parser():
     return parser
 
 
+def _write_output(output, path=None):
+    if path:
+        directory = os.path.dirname(os.path.abspath(path))
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(output)
+            if output and not output.endswith("\n"):
+                handle.write("\n")
+    else:
+        sys.stdout.write(output)
+        if output and not output.endswith("\n"):
+            sys.stdout.write("\n")
+
+
 def main(argv=None):
     configure_stdio()
     args = build_parser().parse_args(argv)
     try:
+        if not args.source and not args.check_selection:
+            raise TranscriptError(
+                "bad_input",
+                "Pass a YouTube URL, a subtitle/transcript file, or '-' for "
+                "stdin.", 400)
         if args.list_languages and not _looks_like_youtube(args.source):
             raise TranscriptError(
                 "not_youtube",
                 "--list-languages needs a YouTube URL or ID.", 400)
-        source = load_source(args.source, args)
-        if source.get("kind") == "languages":
+
+        source = load_source(args.source, args) if args.source else None
+        if source and source.get("kind") == "languages":
             result = source["video"]
-            print(json.dumps(result.get("languages") or [], ensure_ascii=False,
-                             indent=None if args.compact else 2))
+            _write_output(json.dumps(result.get("languages") or [],
+                                     ensure_ascii=False,
+                                     indent=None if args.compact else 2),
+                          args.out)
             return 0
-        if args.language:
-            source["transcript"]["language"] = args.language
-        if args.duration is not None:
-            last_end = _last_end(source["transcript"])
-            if args.duration < last_end:
-                raise TranscriptError(
-                    "bad_duration",
-                    f"--duration ({args.duration:g}s) is before the last "
-                    f"segment end ({last_end:g}s).", 400)
-            source["duration"] = args.duration
+        if source:
+            if args.language:
+                source["transcript"]["language"] = args.language
+            if args.duration is not None:
+                last_end = _last_end(source["transcript"])
+                if args.duration < last_end:
+                    raise TranscriptError(
+                        "bad_duration",
+                        f"--duration ({args.duration:g}s) is before the last "
+                        f"segment end ({last_end:g}s).", 400)
+                source["duration"] = args.duration
+
+        if args.check_selection:
+            report = check_selection_file(
+                args.check_selection, source=source, duration=args.duration,
+                min_secs=args.min_seconds, max_secs=args.max_seconds)
+            _write_output(json.dumps(report, ensure_ascii=False,
+                                     indent=None if args.compact else 2),
+                          args.out)
+            return 0 if report["valid"] else 2
+
         output = render(source, args)
-        if args.out:
-            directory = os.path.dirname(os.path.abspath(args.out))
-            if directory:
-                os.makedirs(directory, exist_ok=True)
-            with open(args.out, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(output)
-                if output and not output.endswith("\n"):
-                    handle.write("\n")
-        else:
-            sys.stdout.write(output)
-            if output and not output.endswith("\n"):
-                sys.stdout.write("\n")
+        _write_output(output, args.out)
         return 0
     except TranscriptError as exc:
         print(f"error: {exc.message}", file=sys.stderr)

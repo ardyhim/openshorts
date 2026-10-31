@@ -158,6 +158,27 @@ These mirror `dashboard/tools/transcript.js`:
 - `srt`: numbered cues; `HH:MM:SS,mmm --> HH:MM:SS,mmm`; the end is the cue end,
   or at least 0.5 s when a cue is shorter.
 
+## Clip selection (agent step)
+
+`--check-selection` validates an `openshorts.clip-selection.v1` file against the
+source and the app's import rules. It is not a `--format`: the agent reads the
+export and chooses the clips; the script only checks timestamps, lengths,
+counts and field limits.
+
+```bash
+python scripts/openshorts_transcript.py transcript.json \
+  --check-selection clip-selection.json
+```
+
+The report is JSON with `valid`, `clips`, `duration_seconds`, `warnings`,
+`errors` and `items[]`. Exit code is 0 when importable, 2 when not. Without a
+source, pass `--duration`.
+
+Selection rules and the editorial checklist live in
+[`clip-selection.md`](clip-selection.md). The app imports the file with
+`POST /api/jobs/{job_id}/analysis/import` (self-host/free mode, job must have a
+transcript).
+
 ## Errors
 
 The script prints `error: <message>` to stderr and exits 2 for user errors.
@@ -172,6 +193,7 @@ The script prints `error: <message>` to stderr and exits 2 for user errors.
 | `no_timestamps` | The requested JSON/SRT format needs timed cues. |
 | `ambiguous_duration` | A TXT's last cue has no end; pass `--duration`. |
 | `bad_duration` | `--duration` is before the last segment end. |
+| `bad_selection` | The clip selection is not parseable JSON or has no clips list. |
 
 ## App source map
 
@@ -181,6 +203,8 @@ The script prints `error: <message>` to stderr and exits 2 for user errors.
 | `pipeline` | `transcribe_backends.transcribe_media()`; `main.transcribe_video()` |
 | `youtube` | `free_tools.fetch_transcript()`, `choose_track()`, `parse_json3()`; route in `free_tools.transcript_routes()` |
 | `text` / `srt` | `dashboard/tools/transcript.js` (`asText`, `asSrt`) |
+| `--check-selection` | `manual_clip_selection.parse_selection_payload()` |
+| Clip selection | `openshorts.clip-selection.v1`; imported by `app.import_job_analysis()` |
 | Windows and clip counts | `clip_selection.build_transcript_windows()`, `clip_count_targets()` |
 | Prompt | `manual_clip_selection._prompt()` |
 

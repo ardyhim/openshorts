@@ -1,7 +1,7 @@
 {
   "name": "openshorts-transcript",
-  "version": "1.0.0",
-  "description": "Generate the transcript JSON the OpenShorts app produces from a YouTube URL or subtitle file: the transcript export, the word-level pipeline contract, or the public YouTube captions response.",
+  "version": "1.1.0",
+  "description": "Generate the transcript JSON the OpenShorts app produces from a YouTube URL or subtitle file, and the clip-selection JSON the app imports: the transcript export, the word-level pipeline contract, the public YouTube captions response, or openshorts.clip-selection.v1.",
   "author": {
     "name": "OpenShorts",
     "url": "https://www.openshorts.app/"
@@ -16,6 +16,9 @@
     "srt",
     "vtt",
     "youtube",
+    "clip selection",
+    "highlights",
+    "shorts",
     "openshorts"
   ],
   "skills": [

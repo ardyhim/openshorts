@@ -1,15 +1,18 @@
 # OpenShorts transcript skill
 
 An [Agent Skill](https://agentskills.io) that turns a YouTube URL or a subtitle
-file into the same transcript payloads the OpenShorts app produces.
+file into the same transcript payloads the OpenShorts app produces — and,
+optionally, the `clip-selection.json` the app imports.
 
-It mirrors three contracts:
+It mirrors four contracts:
 
 - `openshorts.transcript-export.v1` — the app's downloadable transcript export
   (the default).
 - The word-level `source_transcript.json` shape the clipping pipeline consumes.
 - The public YouTube transcript generator response from
   `GET /api/tools/youtube-transcript`.
+- `openshorts.clip-selection.v1` — the clip picks the app's manual import
+  accepts.
 
 Plus readable TXT and SRT output for editors.
 
@@ -46,6 +49,25 @@ python scripts/openshorts_transcript.py captions.srt --format text --timestamps
 python scripts/openshorts_transcript.py captions.srt --format srt -o captions.srt
 ```
 
+## Clips in one pass
+
+When the user wants clip moments, the agent produces both files:
+
+```bash
+# 1. Transcript export (duration, windows, prompt, output contract)
+python scripts/openshorts_transcript.py "<youtube-url>" -o video.transcript.json
+
+# 2. The agent reads the export and writes video.clip-selection.json
+#    following clip-selection.md, then validates it:
+python scripts/openshorts_transcript.py video.transcript.json \
+  --check-selection video.clip-selection.json
+```
+
+`--check-selection` mirrors the app's `parse_selection_payload()`: it reports
+`valid`, `warnings`, `errors` and per-clip timings, and exits `2` when the file
+cannot be imported. The Python script cannot judge which moments are good — the
+agent does that from the transcript — but it guarantees the result will import.
+
 Useful options:
 
 - `--lang es` / `--lang en-orig` chooses a YouTube caption track.
@@ -55,6 +77,8 @@ Useful options:
   cue.
 - `--cookies cookies.txt` and `--proxy <url>` handle YouTube restrictions.
 - `-` reads stdin (JSON, SRT/VTT, or plain text for `--format text`).
+- `--check-selection FILE` validates a `clip-selection.json`; pair it with a
+  transcript source or `--duration`.
 
 ## Parity
 
@@ -65,8 +89,10 @@ python -m pytest tests/test_openshorts_transcript_skill.py -q
 ```
 
 The export is compared field-for-field with
-`manual_clip_selection.build_transcript_export()`, and the YouTube helpers with
-`free_tools.extract_video_id()`, `choose_track()` and `parse_json3()`.
+`manual_clip_selection.build_transcript_export()`, the YouTube helpers with
+`free_tools.extract_video_id()`, `choose_track()` and `parse_json3()`, and the
+selection validator against the import rules in
+`manual_clip_selection.parse_selection_payload()`.
 
 ## Accuracy note
 

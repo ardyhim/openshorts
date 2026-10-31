@@ -298,6 +298,146 @@ class TestYouTubeParity:
             assert skill.choose_track(info, lang) == free_tools.choose_track(info, lang)
 
 
+class TestSelectionValidation:
+    def payload(self, **overrides):
+        clip = {
+            "start": 10.0, "end": 40.0, "score": 85,
+            "title": "A specific title", "hook": "A strong hook",
+            "reason": "It pays off.",
+            "description_tiktok": "Tease. #a #b #c",
+            "description_instagram": "Tease. #a #b #c",
+        }
+        clip.update(overrides)
+        return {"schema": "openshorts.clip-selection.v1", "clips": [clip]}
+
+    def test_valid_selection(self):
+        report = skill.validate_selection(self.payload(), duration=100.0)
+        assert report["valid"] is True
+        assert report["errors"] == []
+        assert report["warnings"] == []
+        assert report["clips"] == 1
+        assert report["items"][0] == {
+            "index": 1, "start": 10.0, "end": 40.0, "seconds": 30.0,
+            "score": 85, "title": "A specific title"}
+
+    def test_fenced_json_from_a_chat_reply_is_accepted(self):
+        raw = ("Here is the selection:\n```json\n"
+               + json.dumps(self.payload()) + "\n```\n")
+        report = skill.validate_selection(raw, duration=100.0)
+        assert report["valid"] is True
+        assert report["errors"] == []
+
+    def test_wrong_schema_is_a_warning_not_an_error(self):
+        payload = self.payload()
+        payload["schema"] = "something.else"
+        report = skill.validate_selection(payload, duration=100.0)
+        assert report["valid"] is True
+        assert any("schema should be" in warning
+                   for warning in report["warnings"])
+
+    def test_missing_fields_warn_but_still_import(self):
+        report = skill.validate_selection(
+            {"clips": [{"start": 10.0, "end": 40.0}]}, duration=100.0)
+        assert report["valid"] is True
+        assert any("no title" in warning for warning in report["warnings"])
+        assert any("no hook" in warning for warning in report["warnings"])
+        assert any("no description_tiktok" in warning
+                   for warning in report["warnings"])
+
+    def test_missing_title_is_derived_from_the_transcript(self):
+        transcript = {"segments": [{
+            "start": 10.0, "end": 40.0,
+            "text": "The real first sentence. More after it."}]}
+        report = skill.validate_selection(
+            {"clips": [{"start": 10.0, "end": 40.0}]},
+            duration=100.0, transcript=transcript)
+        assert report["items"][0]["title"] == "The real first sentence."
+
+    def test_end_past_duration_is_clamped_with_a_warning(self):
+        report = skill.validate_selection(
+            self.payload(end=120.0), duration=100.0)
+        assert report["valid"] is True
+        assert report["items"][0]["end"] == 100.0
+        assert any("past the source" in warning
+                   for warning in report["warnings"])
+
+    def test_inverted_times_are_an_error(self):
+        report = skill.validate_selection(
+            self.payload(start=40.0, end=30.0), duration=100.0)
+        assert report["valid"] is False
+        assert any("greater than start" in error for error in report["errors"])
+
+    def test_a_sub_second_clip_is_an_error(self):
+        report = skill.validate_selection(
+            self.payload(start=10.0, end=10.5), duration=100.0)
+        assert report["valid"] is False
+        assert any("too short" in error for error in report["errors"])
+
+    def test_too_many_clips_is_an_error(self):
+        clips = [{"start": float(index), "end": float(index) + 30.0}
+                 for index in range(51)]
+        report = skill.validate_selection({"clips": clips}, duration=1000.0)
+        assert report["valid"] is False
+        assert any("Too many clips" in error for error in report["errors"])
+
+    def test_length_warnings_do_not_block_the_import(self):
+        below = skill.validate_selection(
+            self.payload(start=10.0, end=20.0), duration=100.0)
+        assert below["valid"] is True
+        assert any("below the requested minimum" in warning
+                   for warning in below["warnings"])
+        above = skill.validate_selection(
+            self.payload(start=10.0, end=80.0), duration=100.0)
+        assert above["valid"] is True
+        assert any("above the requested maximum" in warning
+                   for warning in above["warnings"])
+
+    def test_overlapping_clips_warn(self):
+        first = self.payload()["clips"][0]
+        second = self.payload(start=30.0, end=60.0)["clips"][0]
+        report = skill.validate_selection(
+            {"clips": [first, second]}, duration=100.0)
+        assert report["valid"] is True
+        assert any("overlap" in warning for warning in report["warnings"])
+
+    def test_unknown_duration_is_an_error(self):
+        report = skill.validate_selection(self.payload(), duration=0)
+        assert report["valid"] is False
+        assert any("duration is unknown" in error for error in report["errors"])
+
+    def test_cli_uses_the_source_duration(self, capsys, tmp_path):
+        transcript = {
+            "text": "Hello.", "language": "en",
+            "segments": [{"start": 0.0, "end": 100.0, "text": "Hello."}],
+        }
+        export = skill.build_transcript_export(transcript, 100.0)
+        source = tmp_path / "transcript.json"
+        source.write_text(json.dumps(export), encoding="utf-8")
+        selection = tmp_path / "selection.json"
+        selection.write_text(json.dumps(self.payload()), encoding="utf-8")
+
+        assert skill.main([str(source), "--check-selection",
+                           str(selection)]) == 0
+        report = json.loads(capsys.readouterr().out)
+        assert report["valid"] is True
+        assert report["duration_seconds"] == 100.0
+
+    def test_cli_bad_selection_exits_2(self, capsys, tmp_path):
+        selection = tmp_path / "selection.json"
+        selection.write_text(json.dumps(
+            self.payload(start=40.0, end=30.0)), encoding="utf-8")
+        assert skill.main(["--check-selection", str(selection),
+                           "--duration", "100"]) == 2
+        report = json.loads(capsys.readouterr().out)
+        assert report["valid"] is False
+
+    def test_cli_needs_a_source_or_duration(self, capsys, tmp_path):
+        selection = tmp_path / "selection.json"
+        selection.write_text(json.dumps(self.payload()), encoding="utf-8")
+        assert skill.main(["--check-selection", str(selection)]) == 2
+        assert "source or --duration" in capsys.readouterr().err
+
+
 class TestCli:
     def run(self, capsys, *argv):
         assert skill.main(list(argv)) == 0

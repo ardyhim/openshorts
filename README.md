@@ -479,13 +479,18 @@ openclaw skills install @mutonby/openshorts
 
 `skills/openshorts-transcript/` is the companion for transcription itself: a
 YouTube URL or SRT/VTT/TXT/JSON in, and the transcript export, word-level
-pipeline contract, or YouTube captions response the app produces.
+pipeline contract, YouTube captions response, or `openshorts.clip-selection.v1`
+clip picks the app imports.
 
 ```bash
 # Claude Code; OpenCode uses ~/.config/opencode/skills/
 cp -r skills/openshorts-transcript ~/.claude/skills/
 python skills/openshorts-transcript/scripts/openshorts_transcript.py \
   "https://youtube.com/watch?v=..." -o transcript.json
+
+# The agent reads transcript.json and writes clip-selection.json, then:
+python skills/openshorts-transcript/scripts/openshorts_transcript.py \
+  transcript.json --check-selection clip-selection.json
 ```
 
 ### n8n
