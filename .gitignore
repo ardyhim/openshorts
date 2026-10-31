@@ -41,9 +41,10 @@ output/
 .agents/
 .agent/
 .claude/
-# skills/ holds third-party installs (symlinks); our own published skill is versioned
+# skills/ holds third-party installs (symlinks); our own published skills are versioned
 skills/*
 !skills/openshorts/
+!skills/openshorts-transcript/
 skills-lock.json
 
 
